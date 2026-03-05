@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime, date, timedelta
 from supabase import create_client, Client
+import anthropic
 
 st.set_page_config(
     page_title="TASK·MATRIX",
@@ -128,6 +129,135 @@ DEFAULT_TASKS = [
     {"id": 8, "name": "Brain セールスレター 改稿", "description": "ターゲット訴求を強化", "quad": "B", "future": 5, "status": "todo", "due": "2026-03-22", "assignees": ["a"], "tag": "コンテンツ", "project": "p1"},
     {"id": 9, "name": "競合スタジオ NONO 調査メモ整理", "description": "加古川・高砂・神戸3拠点の料金体系比較", "quad": "B", "future": 4, "status": "done", "due": "2026-02-20", "assignees": ["c", "a"], "tag": "調査", "project": "p4"},
 ]
+
+# ── Anthropic ────────────────────────────────────────────────────────────────
+@st.cache_resource
+def get_anthropic_client():
+    return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+def build_task_context():
+    """タスク一覧をAIに渡す文字列を構築"""
+    today = date.today().strftime("%Y-%m-%d")
+    member_map  = {m["id"]: m["name"] for m in st.session_state.members}
+    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
+
+    lines = [f"今日の日付: {today}\n", "## タスク一覧\n"]
+    for t in st.session_state.tasks:
+        assignees = ", ".join(member_map.get(a, a) for a in (t.get("assignees") or []))
+        proj = project_map.get(t.get("project", ""), "なし")
+        stars = "★" * t.get("future", 1) + "☆" * (5 - t.get("future", 1))
+        lines.append(
+            f"- [{t['quad']}象限] {t['name']}"
+            f" | ステータス:{STATUS_LABELS.get(t['status'], t['status'])}"
+            f" | 締切:{t.get('due','未設定')}"
+            f" | 未来重要度:{stars}"
+            f" | 担当:{assignees or 'なし'}"
+            f" | プロジェクト:{proj}"
+            f" | タグ:{t.get('tag','')}\n"
+        )
+    return "".join(lines)
+
+def ai_overall_stream():
+    """全タスクの優先度分析をストリーミング"""
+    client = get_anthropic_client()
+    context = build_task_context()
+    with client.messages.stream(
+        model="claude-opus-4-6",
+        max_tokens=2048,
+        thinking={"type": "adaptive"},
+        system=(
+            "あなたはタスク管理の専門家です。"
+            "アイゼンハワーマトリクス（緊急×重要）と未来重要度の両方を考慮して"
+            "実践的なアドバイスを日本語で提供してください。"
+            "回答は箇条書きを活用して読みやすく整理してください。"
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{context}\n\n"
+                "上記のタスクを分析して以下を教えてください：\n"
+                "1. **今すぐ取り組むべきトップ3タスク**（理由付き）\n"
+                "2. **リスクのあるタスク**（期限切れ・期限間近・重要なのに放置されているもの）\n"
+                "3. **担当者の負荷バランス**への気づき\n"
+                "4. **今週の戦略的アドバイス**（B象限＝未来重要タスクの扱い方を含む）"
+            )
+        }]
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+def ai_single_task_stream(task):
+    """個別タスクへのアドバイスをストリーミング"""
+    client = get_anthropic_client()
+    today = date.today().strftime("%Y-%m-%d")
+    member_map  = {m["id"]: m["name"] for m in st.session_state.members}
+    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
+    assignees = ", ".join(member_map.get(a, a) for a in (task.get("assignees") or []))
+    proj = project_map.get(task.get("project", ""), "なし")
+
+    task_detail = (
+        f"タスク名: {task['name']}\n"
+        f"説明: {task.get('description','')}\n"
+        f"象限: {task['quad']}（{QUAD_LABELS[task['quad']]}）\n"
+        f"ステータス: {STATUS_LABELS.get(task['status'], task['status'])}\n"
+        f"締切: {task.get('due','未設定')}\n"
+        f"未来重要度: {'★' * task.get('future',1)}\n"
+        f"担当者: {assignees or 'なし'}\n"
+        f"プロジェクト: {proj}\n"
+        f"タグ: {task.get('tag','')}\n"
+        f"今日の日付: {today}"
+    )
+    with client.messages.stream(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        system=(
+            "あなたはタスク管理の専門家です。"
+            "具体的・実践的なアドバイスを日本語で簡潔に提供してください。"
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"以下のタスクについてアドバイスをください：\n\n{task_detail}\n\n"
+                "・このタスクの進め方・最初のアクション\n"
+                "・注意すべきリスクや落とし穴\n"
+                "・完了までの具体的なステップ（3〜5つ）"
+            )
+        }]
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+# ── AI view ───────────────────────────────────────────────────────────────────
+def render_ai(tasks):
+    st.markdown("### AI タスクアドバイザー")
+    st.markdown("Claude が現在のタスク状況を分析し、優先度と行動指針を提案します。")
+
+    # 全体分析
+    st.markdown("#### 全体分析")
+    if st.button("AIに全タスクを分析させる", type="primary", key="ai_overall_btn"):
+        with st.spinner("分析中..."):
+            st.write_stream(ai_overall_stream())
+
+    st.markdown("---")
+
+    # 個別タスクへのアドバイス
+    st.markdown("#### 個別タスクへのアドバイス")
+    task_names = {t["id"]: f"[{t['quad']}] {t['name']}" for t in st.session_state.tasks}
+    if not task_names:
+        st.info("タスクがありません")
+        return
+
+    selected_id = st.selectbox(
+        "タスクを選択",
+        options=list(task_names.keys()),
+        format_func=lambda x: task_names[x],
+        key="ai_task_select"
+    )
+    if st.button("このタスクのアドバイスを聞く", key="ai_single_btn"):
+        task = next((t for t in st.session_state.tasks if t["id"] == selected_id), None)
+        if task:
+            with st.spinner("分析中..."):
+                st.write_stream(ai_single_task_stream(task))
 
 # ── Supabase ─────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -538,13 +668,14 @@ def main():
                 st.rerun()
         st.markdown("---")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル", "AI アドバイス"])
     filtered = apply_filters(st.session_state.tasks)
 
     with tab1: render_kanban(filtered)
     with tab2: render_matrix(filtered)
     with tab3: render_projects(filtered)
     with tab4: render_table(filtered)
+    with tab5: render_ai(filtered)
 
 if __name__ == "__main__":
     main()
