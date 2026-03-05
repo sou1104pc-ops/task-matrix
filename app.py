@@ -104,10 +104,10 @@ STATUS_LABELS = {"todo": "未着手", "doing": "進行中", "done": "完了"}
 STARS = {1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
 
 DEFAULT_PROJECTS = [
-    {"id": "p1", "name": "Brain コンテンツ販売", "description": "レンタルスタジオ開業ガイド教材の制作・販売", "color": "#7b78ff"},
-    {"id": "p2", "name": "姫路民泊投資", "description": "姫路城周辺の短期賃貸物件の取得・運営", "color": "#ffc933"},
-    {"id": "p3", "name": "M&A・事業売却", "description": "3年以内に約1億円での事業売却を目指す", "color": "#2ecc71"},
-    {"id": "p4", "name": "スタジオ運営改善", "description": "各拠点のオペレーション効率化・品質向上", "color": "#48bfe3"},
+    {"id": "p1", "name": "Brain コンテンツ販売", "description": "レンタルスタジオ開業ガイド教材の制作・販売", "color": "#7b78ff", "parent": ""},
+    {"id": "p2", "name": "姫路民泊投資", "description": "姫路城周辺の短期賃貸物件の取得・運営", "color": "#ffc933", "parent": ""},
+    {"id": "p3", "name": "M&A・事業売却", "description": "3年以内に約1億円での事業売却を目指す", "color": "#2ecc71", "parent": ""},
+    {"id": "p4", "name": "スタジオ運営改善", "description": "各拠点のオペレーション効率化・品質向上", "color": "#48bfe3", "parent": ""},
 ]
 
 DEFAULT_MEMBERS = [
@@ -318,6 +318,10 @@ def db_delete_member(member_id):
 def init_state():
     if "tasks" not in st.session_state:
         tasks, projects, members = db_load()
+        # Ensure parent field exists on all projects (backwards compat)
+        for p in projects:
+            if "parent" not in p:
+                p["parent"] = ""
         st.session_state.tasks    = tasks
         st.session_state.projects = projects
         st.session_state.members  = members
@@ -337,6 +341,34 @@ def get_project(pid):
         if p["id"] == pid:
             return p
     return None
+
+def get_children(pid):
+    return [p for p in st.session_state.projects if p.get("parent", "") == pid]
+
+def get_descendant_ids(pid):
+    ids = [pid]
+    for c in get_children(pid):
+        ids.extend(get_descendant_ids(c["id"]))
+    return ids
+
+def is_top_level(p):
+    return not p.get("parent", "")
+
+def get_top_level_projects():
+    return [p for p in st.session_state.projects if is_top_level(p)]
+
+def build_project_options(exclude_id=None):
+    """Build hierarchical project option list for dropdowns."""
+    opts = []
+    for p in get_top_level_projects():
+        if p["id"] == exclude_id:
+            continue
+        opts.append((p["id"], p["name"]))
+        for c in get_children(p["id"]):
+            if c["id"] == exclude_id:
+                continue
+            opts.append((c["id"], f"  └ {c['name']}"))
+    return opts
 
 def due_class(due_str):
     if not due_str:
@@ -403,7 +435,11 @@ def apply_filters(tasks):
         result = [t for t in result if t["quad"] in quads]
     projs = f.get("projects", [])
     if projs:
-        result = [t for t in result if t.get("project", "") in projs]
+        # Include tasks from child projects when parent is selected
+        all_proj_ids = set()
+        for pid in projs:
+            all_proj_ids.update(get_descendant_ids(pid))
+        result = [t for t in result if t.get("project", "") in all_proj_ids]
     asns = f.get("assignees", [])
     if asns:
         result = [t for t in result if any(a in (t.get("assignees") or []) for a in asns)]
@@ -426,10 +462,11 @@ def render_sidebar():
     f["status"] = st.sidebar.selectbox("ステータス", status_opts, index=status_opts.index(f.get("status", "すべて")))
     f["quads"] = st.sidebar.multiselect("象限", ["A", "B", "C", "D"], default=f.get("quads", []))
 
-    proj_opts = {p["id"]: p["name"] for p in st.session_state.projects}
+    proj_opt_list = build_project_options()
+    proj_opts = {pid: label for pid, label in proj_opt_list}
     sel_projs = st.sidebar.multiselect("プロジェクト", list(proj_opts.values()),
                                         default=[proj_opts[pid] for pid in f.get("projects", []) if pid in proj_opts])
-    f["projects"] = [pid for pid, pname in proj_opts.items() if pname in sel_projs]
+    f["projects"] = [pid for pid, plabel in proj_opts.items() if plabel in sel_projs]
 
     member_opts = {m["id"]: m["name"] for m in st.session_state.members}
     sel_members = st.sidebar.multiselect("担当者", list(member_opts.values()),
@@ -471,22 +508,34 @@ def render_member_manager():
 
 # ── Project manager ───────────────────────────────────────────────────────────
 def render_project_manager():
-    for p in st.session_state.projects:
+    for p in get_top_level_projects():
         c1, c2 = st.columns([3, 1])
-        c1.markdown(f'<span style="color:{p["color"]}">◆</span> {p["name"]}', unsafe_allow_html=True)
+        c1.markdown(f'<span style="color:{p["color"]}">◆</span> **{p["name"]}**', unsafe_allow_html=True)
         if c2.button("削除", key=f"del_p_{p['id']}"):
             db_delete_project(p["id"])
             st.session_state.projects = [x for x in st.session_state.projects if x["id"] != p["id"]]
             st.rerun()
+        for c in get_children(p["id"]):
+            cc1, cc2 = st.columns([3, 1])
+            cc1.markdown(f'&nbsp;&nbsp;&nbsp;└ <span style="color:{c["color"]}">◆</span> {c["name"]}', unsafe_allow_html=True)
+            if cc2.button("削除", key=f"del_p_{c['id']}"):
+                db_delete_project(c["id"])
+                st.session_state.projects = [x for x in st.session_state.projects if x["id"] != c["id"]]
+                st.rerun()
 
     with st.form("add_project_form", clear_on_submit=True):
         pn = st.text_input("プロジェクト名")
+        parent_opts = [("", "なし（トップレベル）")] + [(p["id"], p["name"]) for p in get_top_level_projects()]
+        parent_names = [label for _, label in parent_opts]
+        parent_ids = [pid for pid, _ in parent_opts]
+        parent_sel = st.selectbox("親プロジェクト", parent_names)
+        parent_id = parent_ids[parent_names.index(parent_sel)]
         pd_input = st.text_input("説明")
         pc = st.color_picker("カラー", value="#7b78ff")
         if st.form_submit_button("追加"):
             if pn.strip():
                 new_pid = f"p{len(st.session_state.projects)+1}"
-                new_proj = {"id": new_pid, "name": pn.strip(), "description": pd_input, "color": pc}
+                new_proj = {"id": new_pid, "name": pn.strip(), "description": pd_input, "color": pc, "parent": parent_id}
                 db_upsert_project(new_proj)
                 st.session_state.projects.append(new_proj)
                 st.rerun()
@@ -525,9 +574,9 @@ def render_task_form(task=None, form_key="add_task"):
 
         tag = st.text_input("カテゴリタグ", value=task.get("tag", "") if is_edit else "")
 
-        proj_opts = {"": "なし"} | {p["id"]: p["name"] for p in st.session_state.projects}
-        proj_names = list(proj_opts.values())
-        proj_ids = list(proj_opts.keys())
+        proj_opt_list = [("", "なし")] + build_project_options()
+        proj_ids = [pid for pid, _ in proj_opt_list]
+        proj_names = [label for _, label in proj_opt_list]
         cur_proj = task.get("project", "") if is_edit else ""
         proj_idx = proj_ids.index(cur_proj) if cur_proj in proj_ids else 0
         proj_sel = st.selectbox("プロジェクト", proj_names, index=proj_idx)
@@ -610,11 +659,29 @@ def render_matrix(tasks):
 
 # ── Project view ──────────────────────────────────────────────────────────────
 def render_projects(_tasks):
-    for p in st.session_state.projects:
-        p_tasks = [t for t in st.session_state.tasks if t.get("project") == p["id"]]
+    for p in get_top_level_projects():
+        all_ids = get_descendant_ids(p["id"])
+        p_tasks = [t for t in st.session_state.tasks if t.get("project") in all_ids]
         total = len(p_tasks)
         done  = sum(1 for t in p_tasks if t["status"] == "done")
         ratio = done / total if total > 0 else 0
+        children = get_children(p["id"])
+        sub_html = ""
+        if children:
+            sub_items = []
+            for c in children:
+                c_tasks = [t for t in st.session_state.tasks if t.get("project") == c["id"]]
+                c_total = len(c_tasks)
+                c_done = sum(1 for t in c_tasks if t["status"] == "done")
+                c_pct = int(c_done / c_total * 100) if c_total > 0 else 0
+                sub_items.append(
+                    f'<div style="display:flex;align-items:center;gap:6px;padding:3px 8px;margin-top:3px;'
+                    f'background:#14141f;border-radius:5px;font-size:12px;">'
+                    f'<span style="color:{c["color"]}">●</span>'
+                    f'<span style="color:#a0a0c0;flex:1">{c["name"]}</span>'
+                    f'<span style="color:#6060a0;font-size:10px">{c_done}/{c_total} ({c_pct}%)</span></div>'
+                )
+            sub_html = f'<div style="margin-top:8px;"><div style="font-size:10px;color:#6060a0;letter-spacing:.08em;margin-bottom:2px;">サブプロジェクト</div>{"".join(sub_items)}</div>'
         st.markdown(f"""
 <div class="proj-card" style="border-top-color:{p['color']}">
   <div style="display:flex;justify-content:space-between;">
@@ -622,6 +689,7 @@ def render_projects(_tasks):
     <span style="color:#888;font-size:12px;">{done}/{total} 完了</span>
   </div>
   <div style="color:#6060a0;font-size:12px;margin-top:4px;">{p.get('description','')}</div>
+  {sub_html}
 </div>
 """, unsafe_allow_html=True)
         st.progress(ratio, text=f"{int(ratio*100)}%")
