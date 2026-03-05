@@ -308,6 +308,10 @@ def render_sidebar():
     f["future_min"] = st.sidebar.slider("未来重要度（最低）", 1, 5, value=f.get("future_min", 1))
 
     st.sidebar.markdown("---")
+    if st.sidebar.button("+ タスクを追加", use_container_width=True, type="primary"):
+        st.session_state["show_add_form"] = not st.session_state.get("show_add_form", False)
+
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 管理")
     with st.sidebar.expander("メンバー管理"):
         render_member_manager()
@@ -525,17 +529,22 @@ def main():
     render_stats(st.session_state.tasks)
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル", "タスク追加"])
+    # サイドバーの「+ タスクを追加」ボタンで開くフォーム
+    if st.session_state.get("show_add_form", False):
+        with st.container(border=True):
+            if render_task_form(form_key="add_task_sidebar"):
+                st.success("タスクを追加しました")
+                st.session_state["show_add_form"] = False
+                st.rerun()
+        st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル"])
     filtered = apply_filters(st.session_state.tasks)
 
     with tab1: render_kanban(filtered)
     with tab2: render_matrix(filtered)
     with tab3: render_projects(filtered)
     with tab4: render_table(filtered)
-    with tab5:
-        if render_task_form(form_key="add_task_main"):
-            st.success("タスクを追加しました")
-            st.rerun()
 
 if __name__ == "__main__":
     main()
