@@ -997,6 +997,21 @@ def render_calendar(tasks):
     st.markdown(grid_html, unsafe_allow_html=True)
 
 # ── Project view ──────────────────────────────────────────────────────────────
+def _render_project_tasks(proj_id, key_prefix):
+    """指定プロジェクトに直接紐づくタスクをカード表示"""
+    p_tasks = [t for t in st.session_state.tasks if t.get("project") == proj_id]
+    if not p_tasks:
+        st.caption("タスクなし")
+        return
+    active = sorted([t for t in p_tasks if t["status"] != "done"], key=lambda t: t.get("due", "9999"))
+    done_tasks = [t for t in p_tasks if t["status"] == "done"]
+    for t in active:
+        st.markdown(task_card_html(t), unsafe_allow_html=True)
+    if done_tasks:
+        with st.expander(f"完了済み（{len(done_tasks)}件）"):
+            for t in done_tasks:
+                st.markdown(task_card_html(t), unsafe_allow_html=True)
+
 def render_projects(_tasks):
     for p in get_top_level_projects():
         all_ids = get_descendant_ids(p["id"])
@@ -1005,22 +1020,8 @@ def render_projects(_tasks):
         done  = sum(1 for t in p_tasks if t["status"] == "done")
         ratio = done / total if total > 0 else 0
         children = get_children(p["id"])
-        sub_html = ""
-        if children:
-            sub_items = []
-            for c in children:
-                c_tasks = [t for t in st.session_state.tasks if t.get("project") == c["id"]]
-                c_total = len(c_tasks)
-                c_done = sum(1 for t in c_tasks if t["status"] == "done")
-                c_pct = int(c_done / c_total * 100) if c_total > 0 else 0
-                sub_items.append(
-                    f'<div style="display:flex;align-items:center;gap:6px;padding:3px 8px;margin-top:3px;'
-                    f'background:#14141f;border-radius:5px;font-size:12px;">'
-                    f'<span style="color:{c["color"]}">●</span>'
-                    f'<span style="color:#a0a0c0;flex:1">{c["name"]}</span>'
-                    f'<span style="color:#6060a0;font-size:10px">{c_done}/{c_total} ({c_pct}%)</span></div>'
-                )
-            sub_html = f'<div style="margin-top:8px;"><div style="font-size:10px;color:#6060a0;letter-spacing:.08em;margin-bottom:2px;">サブプロジェクト</div>{"".join(sub_items)}</div>'
+
+        # 親プロジェクトヘッダー
         st.markdown(f"""
 <div class="proj-card" style="border-top-color:{p['color']}">
   <div style="display:flex;justify-content:space-between;">
@@ -1028,25 +1029,36 @@ def render_projects(_tasks):
     <span style="color:#888;font-size:12px;">{done}/{total} 完了</span>
   </div>
   <div style="color:#6060a0;font-size:12px;margin-top:4px;">{p.get('description','')}</div>
-  {sub_html}
 </div>
 """, unsafe_allow_html=True)
         st.progress(ratio, text=f"{int(ratio*100)}%")
 
-        if p_tasks:
-            active = [t for t in p_tasks if t["status"] != "done"]
-            done_tasks = [t for t in p_tasks if t["status"] == "done"]
-            active.sort(key=lambda t: t.get("due", "9999"))
+        if children:
+            # 親プロジェクト直下のタスク（サブに属さないもの）
+            direct_tasks = [t for t in st.session_state.tasks if t.get("project") == p["id"]]
+            if direct_tasks:
+                st.markdown(f"**{p['name']} 直下のタスク**")
+                _render_project_tasks(p["id"], f"pdir_{p['id']}")
 
-            if active:
-                for t in active:
-                    st.markdown(task_card_html(t), unsafe_allow_html=True)
-            if done_tasks:
-                with st.expander(f"完了済み（{len(done_tasks)}件）"):
-                    for t in done_tasks:
-                        st.markdown(task_card_html(t), unsafe_allow_html=True)
+            # サブプロジェクトごとにタスクを表示
+            for c in children:
+                c_tasks = [t for t in st.session_state.tasks if t.get("project") == c["id"]]
+                c_total = len(c_tasks)
+                c_done = sum(1 for t in c_tasks if t["status"] == "done")
+                c_pct = int(c_done / c_total * 100) if c_total > 0 else 0
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-top:12px;margin-bottom:6px;">'
+                    f'<span style="color:{c["color"]};font-size:14px;">●</span>'
+                    f'<span style="color:#e0e0ff;font-weight:600;font-size:14px;">{c["name"]}</span>'
+                    f'<span style="color:#6060a0;font-size:11px;">{c_done}/{c_total} ({c_pct}%)</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                _render_project_tasks(c["id"], f"psub_{c['id']}")
         else:
-            st.caption("タスクなし")
+            # サブプロジェクトなし → 直接タスク表示
+            _render_project_tasks(p["id"], f"p_{p['id']}")
+
         st.markdown("---")
 
 # ── Table view ────────────────────────────────────────────────────────────────
