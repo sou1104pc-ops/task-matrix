@@ -971,15 +971,6 @@ def render_calendar(tasks):
     grid_html = f'<div class="cal-grid">{header_html}{"".join(cells)}</div>'
     st.markdown(grid_html, unsafe_allow_html=True)
 
-    # 当月のタスク一覧
-    month_tasks = [t for t in tasks if t.get("due", "").startswith(f"{cal_year}-{cal_month:02d}")]
-    month_tasks.sort(key=lambda t: t.get("due", ""))
-    if month_tasks:
-        st.markdown("---")
-        st.markdown(f"#### {cal_month}月のタスク一覧")
-        for t in month_tasks:
-            st.markdown(task_card_html(t), unsafe_allow_html=True)
-
 # ── Project view ──────────────────────────────────────────────────────────────
 def render_projects(_tasks):
     for p in get_top_level_projects():
@@ -1063,6 +1054,8 @@ def main():
     st.markdown("# TASK·MATRIX")
     st.markdown("アイゼンハワーマトリクス × 未来重要度 タスク管理")
     st.markdown("---")
+    render_calendar(st.session_state.tasks)
+    st.markdown("---")
     render_deadline_alerts()
     render_stats(st.session_state.tasks)
     st.markdown("---")
@@ -1076,15 +1069,14 @@ def main():
                 st.rerun()
         st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["カンバン", "マトリクス", "カレンダー", "プロジェクト", "テーブル", "AI アドバイス"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル", "AI アドバイス"])
     filtered = apply_filters(st.session_state.tasks)
 
     with tab1: render_kanban(filtered)
     with tab2: render_matrix(filtered)
-    with tab3: render_calendar(filtered)
-    with tab4: render_projects(filtered)
-    with tab5: render_table(filtered)
-    with tab6: render_ai(filtered)
+    with tab3: render_projects(filtered)
+    with tab4: render_table(filtered)
+    with tab5: render_ai(filtered)
 
 if __name__ == "__main__":
     main()
