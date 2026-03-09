@@ -850,13 +850,26 @@ def render_kanban(tasks):
             st.markdown(f'<div class="col-header" style="background:#1a1a2e;color:{scolor};">{slabel}</div>', unsafe_allow_html=True)
             for t in [t for t in tasks if t["status"] == skey]:
                 st.markdown(task_card_html(t), unsafe_allow_html=True)
-                ec1, ec2 = st.columns([1, 1])
-                if ec1.button("編集", key=f"edit_k_{t['id']}"):
-                    st.session_state[f"edit_open_{t['id']}"] = True
-                if ec2.button("削除", key=f"del_k_{t['id']}"):
-                    db_delete_task(t["id"])
-                    st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
-                    st.rerun()
+                if t["status"] != "done":
+                    ec1, ec2, ec3 = st.columns([1, 1, 1])
+                    if ec1.button("完了", key=f"done_k_{t['id']}", type="primary"):
+                        t["status"] = "done"
+                        db_upsert_task(t)
+                        st.rerun()
+                    if ec2.button("編集", key=f"edit_k_{t['id']}"):
+                        st.session_state[f"edit_open_{t['id']}"] = True
+                    if ec3.button("削除", key=f"del_k_{t['id']}"):
+                        db_delete_task(t["id"])
+                        st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
+                        st.rerun()
+                else:
+                    ec1, ec2 = st.columns([1, 1])
+                    if ec1.button("編集", key=f"edit_k_{t['id']}"):
+                        st.session_state[f"edit_open_{t['id']}"] = True
+                    if ec2.button("削除", key=f"del_k_{t['id']}"):
+                        db_delete_task(t["id"])
+                        st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
+                        st.rerun()
                 if st.session_state.get(f"edit_open_{t['id']}", False):
                     if render_task_form(task=t, form_key=f"edit_form_{t['id']}"):
                         st.session_state[f"edit_open_{t['id']}"] = False
@@ -871,13 +884,26 @@ def render_matrix(tasks):
                 st.markdown(f'<div class="quad-badge badge-{q}">{QUAD_LABELS[q]}</div>', unsafe_allow_html=True)
                 for t in [t for t in tasks if t["quad"] == q]:
                     st.markdown(task_card_html(t), unsafe_allow_html=True)
-                    ec1, ec2 = st.columns([1, 1])
-                    if ec1.button("編集", key=f"edit_m_{t['id']}"):
-                        st.session_state[f"edit_open_{t['id']}"] = True
-                    if ec2.button("削除", key=f"del_m_{t['id']}"):
-                        db_delete_task(t["id"])
-                        st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
-                        st.rerun()
+                    if t["status"] != "done":
+                        ec1, ec2, ec3 = st.columns([1, 1, 1])
+                        if ec1.button("完了", key=f"done_m_{t['id']}", type="primary"):
+                            t["status"] = "done"
+                            db_upsert_task(t)
+                            st.rerun()
+                        if ec2.button("編集", key=f"edit_m_{t['id']}"):
+                            st.session_state[f"edit_open_{t['id']}"] = True
+                        if ec3.button("削除", key=f"del_m_{t['id']}"):
+                            db_delete_task(t["id"])
+                            st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
+                            st.rerun()
+                    else:
+                        ec1, ec2 = st.columns([1, 1])
+                        if ec1.button("編集", key=f"edit_m_{t['id']}"):
+                            st.session_state[f"edit_open_{t['id']}"] = True
+                        if ec2.button("削除", key=f"del_m_{t['id']}"):
+                            db_delete_task(t["id"])
+                            st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
+                            st.rerun()
                     if st.session_state.get(f"edit_open_{t['id']}", False):
                         if render_task_form(task=t, form_key=f"edit_form_m_{t['id']}"):
                             st.session_state[f"edit_open_{t['id']}"] = False
