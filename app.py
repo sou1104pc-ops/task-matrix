@@ -252,107 +252,308 @@ def build_task_context():
         )
     return "".join(lines)
 
-def ai_overall_stream():
-    """全タスクの優先度分析をストリーミング"""
+# ── AI Tools ──────────────────────────────────────────────────────────────────
+AI_TOOLS = [
+    {
+        "name": "create_task",
+        "description": "新しいタスクを作成する。タスク名は必須。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "タスク名"},
+                "description": {"type": "string", "description": "タスクの説明"},
+                "quad": {"type": "string", "enum": ["A", "B", "C", "D"], "description": "象限 A=重要・緊急, B=重要・非緊急, C=緊急・非重要, D=非重要・非緊急"},
+                "future": {"type": "integer", "minimum": 1, "maximum": 5, "description": "未来重要度 1-5"},
+                "status": {"type": "string", "enum": ["todo", "doing", "done"], "description": "ステータス"},
+                "due": {"type": "string", "description": "締切日 YYYY-MM-DD"},
+                "assignees": {"type": "array", "items": {"type": "string"}, "description": "担当者IDリスト"},
+                "tag": {"type": "string", "description": "カテゴリタグ"},
+                "project": {"type": "string", "description": "プロジェクトID"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "complete_task",
+        "description": "タスクを完了にする。タスクIDまたはタスク名で指定。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "タスクID"},
+                "task_name": {"type": "string", "description": "タスク名（部分一致で検索）"},
+            },
+        },
+    },
+    {
+        "name": "decompose_task",
+        "description": "既存タスクをサブタスクに分解する。元タスクは残り、新しいサブタスクが追加される。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "分解対象のタスクID"},
+                "task_name": {"type": "string", "description": "分解対象のタスク名（部分一致）"},
+                "subtasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                            "due": {"type": "string"},
+                        },
+                        "required": ["name"],
+                    },
+                    "description": "サブタスクのリスト",
+                },
+            },
+            "required": ["subtasks"],
+        },
+    },
+    {
+        "name": "update_task",
+        "description": "既存タスクの情報を更新する。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "タスクID"},
+                "task_name": {"type": "string", "description": "タスク名（部分一致で検索）"},
+                "updates": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "quad": {"type": "string", "enum": ["A", "B", "C", "D"]},
+                        "future": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "status": {"type": "string", "enum": ["todo", "doing", "done"]},
+                        "due": {"type": "string"},
+                        "tag": {"type": "string"},
+                        "project": {"type": "string"},
+                    },
+                    "description": "更新するフィールド",
+                },
+            },
+            "required": ["updates"],
+        },
+    },
+    {
+        "name": "delete_task",
+        "description": "タスクを削除する。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "タスクID"},
+                "task_name": {"type": "string", "description": "タスク名（部分一致で検索）"},
+            },
+        },
+    },
+]
+
+def _find_task(task_id=None, task_name=None):
+    """IDまたは名前でタスクを検索"""
+    if task_id is not None:
+        for t in st.session_state.tasks:
+            if t["id"] == task_id:
+                return t
+    if task_name:
+        nl = task_name.lower()
+        for t in st.session_state.tasks:
+            if nl in t["name"].lower():
+                return t
+    return None
+
+def _exec_tool(name, inp):
+    """ツール呼び出しを実行し結果メッセージを返す"""
+    if name == "create_task":
+        new_task = {
+            "id": st.session_state.next_id,
+            "name": inp["name"],
+            "description": inp.get("description", ""),
+            "quad": inp.get("quad", "B"),
+            "future": inp.get("future", 3),
+            "status": inp.get("status", "todo"),
+            "due": inp.get("due", ""),
+            "assignees": inp.get("assignees", []),
+            "tag": inp.get("tag", ""),
+            "project": inp.get("project", ""),
+            "repeat": "none",
+        }
+        db_upsert_task(new_task)
+        st.session_state.tasks.append(new_task)
+        st.session_state.next_id += 1
+        return f"タスク「{new_task['name']}」を作成しました（ID: {new_task['id']}）"
+
+    elif name == "complete_task":
+        t = _find_task(inp.get("task_id"), inp.get("task_name"))
+        if not t:
+            return "該当するタスクが見つかりませんでした"
+        t["status"] = "done"
+        db_upsert_task(t)
+        return f"タスク「{t['name']}」を完了にしました"
+
+    elif name == "decompose_task":
+        parent = _find_task(inp.get("task_id"), inp.get("task_name"))
+        parent_info = ""
+        if parent:
+            parent_info = f"（元タスク「{parent['name']}」）"
+        created = []
+        for sub in inp.get("subtasks", []):
+            new_task = {
+                "id": st.session_state.next_id,
+                "name": sub["name"],
+                "description": sub.get("description", ""),
+                "quad": parent["quad"] if parent else "B",
+                "future": parent.get("future", 3) if parent else 3,
+                "status": "todo",
+                "due": sub.get("due", parent.get("due", "") if parent else ""),
+                "assignees": parent.get("assignees", []) if parent else [],
+                "tag": parent.get("tag", "") if parent else "",
+                "project": parent.get("project", "") if parent else "",
+                "repeat": "none",
+            }
+            db_upsert_task(new_task)
+            st.session_state.tasks.append(new_task)
+            st.session_state.next_id += 1
+            created.append(new_task["name"])
+        return f"{parent_info} {len(created)}個のサブタスクを作成しました: {', '.join(created)}"
+
+    elif name == "update_task":
+        t = _find_task(inp.get("task_id"), inp.get("task_name"))
+        if not t:
+            return "該当するタスクが見つかりませんでした"
+        updates = inp.get("updates", {})
+        for k, v in updates.items():
+            if k in t:
+                t[k] = v
+        db_upsert_task(t)
+        return f"タスク「{t['name']}」を更新しました"
+
+    elif name == "delete_task":
+        t = _find_task(inp.get("task_id"), inp.get("task_name"))
+        if not t:
+            return "該当するタスクが見つかりませんでした"
+        db_delete_task(t["id"])
+        st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
+        return f"タスク「{t['name']}」を削除しました"
+
+    return "不明なツールです"
+
+def ai_chat_response(messages):
+    """AIチャットレスポンス（ツール使用対応）"""
     client = get_anthropic_client()
     context = build_task_context()
-    with client.messages.stream(
-        model="claude-opus-4-6",
-        max_tokens=2048,
-        thinking={"type": "adaptive"},
-        system=(
-            "あなたはタスク管理の専門家です。"
-            "アイゼンハワーマトリクス（緊急×重要）と未来重要度の両方を考慮して"
-            "実践的なアドバイスを日本語で提供してください。"
-            "回答は箇条書きを活用して読みやすく整理してください。"
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"{context}\n\n"
-                "上記のタスクを分析して以下を教えてください：\n"
-                "1. **今すぐ取り組むべきトップ3タスク**（理由付き）\n"
-                "2. **リスクのあるタスク**（期限切れ・期限間近・重要なのに放置されているもの）\n"
-                "3. **担当者の負荷バランス**への気づき\n"
-                "4. **今週の戦略的アドバイス**（B象限＝未来重要タスクの扱い方を含む）"
-            )
-        }]
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
-
-def ai_single_task_stream(task):
-    """個別タスクへのアドバイスをストリーミング"""
-    client = get_anthropic_client()
-    today = date.today().strftime("%Y-%m-%d")
-    member_map  = {m["id"]: m["name"] for m in st.session_state.members}
+    member_map = {m["id"]: m["name"] for m in st.session_state.members}
     project_map = {p["id"]: p["name"] for p in st.session_state.projects}
-    assignees = ", ".join(member_map.get(a, a) for a in (task.get("assignees") or []))
-    proj = project_map.get(task.get("project", ""), "なし")
 
-    task_detail = (
-        f"タスク名: {task['name']}\n"
-        f"説明: {task.get('description','')}\n"
-        f"象限: {task['quad']}（{QUAD_LABELS[task['quad']]}）\n"
-        f"ステータス: {STATUS_LABELS.get(task['status'], task['status'])}\n"
-        f"締切: {task.get('due','未設定')}\n"
-        f"未来重要度: {'★' * task.get('future',1)}\n"
-        f"担当者: {assignees or 'なし'}\n"
-        f"プロジェクト: {proj}\n"
-        f"タグ: {task.get('tag','')}\n"
-        f"今日の日付: {today}"
+    member_info = "\n".join(f"- ID: {m['id']} / 名前: {m['name']}" for m in st.session_state.members)
+    project_info = "\n".join(f"- ID: {p['id']} / 名前: {p['name']}" for p in st.session_state.projects)
+
+    system_prompt = (
+        "あなたはタスク管理AIアシスタントです。日本語で応答してください。\n"
+        "ユーザーの依頼に応じて、タスクの作成・完了・分解・更新・削除ができます。\n"
+        "ツールを使って実際にタスクを操作してください。\n"
+        "分析やアドバイスを求められた場合は、現在のタスク状況を基に回答してください。\n\n"
+        f"## メンバー一覧\n{member_info}\n\n"
+        f"## プロジェクト一覧\n{project_info}\n\n"
+        f"{context}"
     )
-    with client.messages.stream(
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        system=(
-            "あなたはタスク管理の専門家です。"
-            "具体的・実践的なアドバイスを日本語で簡潔に提供してください。"
-        ),
-        messages=[{
-            "role": "user",
-            "content": (
-                f"以下のタスクについてアドバイスをください：\n\n{task_detail}\n\n"
-                "・このタスクの進め方・最初のアクション\n"
-                "・注意すべきリスクや落とし穴\n"
-                "・完了までの具体的なステップ（3〜5つ）"
-            )
-        }]
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        system=system_prompt,
+        tools=AI_TOOLS,
+        messages=messages,
+    )
+
+    # ツール使用ループ
+    while response.stop_reason == "tool_use":
+        tool_results = []
+        assistant_content = response.content
+        for block in response.content:
+            if block.type == "tool_use":
+                result = _exec_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+        messages = messages + [
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": tool_results},
+        ]
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=system_prompt,
+            tools=AI_TOOLS,
+            messages=messages,
+        )
+
+    # テキスト部分を結合して返す
+    text_parts = [b.text for b in response.content if hasattr(b, "text")]
+    return "\n".join(text_parts), messages + [{"role": "assistant", "content": response.content}]
 
 # ── AI view ───────────────────────────────────────────────────────────────────
-def render_ai(tasks):
-    st.markdown("### AI タスクアドバイザー")
-    st.markdown("Claude が現在のタスク状況を分析し、優先度と行動指針を提案します。")
+def render_ai_chat():
+    """メインエリアにAIチャットを表示"""
+    st.markdown("### AI タスクアシスタント")
+    st.markdown("タスクの分析・作成・完了・分解などを自然言語で指示できます。")
 
-    # 全体分析
-    st.markdown("#### 全体分析")
-    if st.button("AIに全タスクを分析させる", type="primary", key="ai_overall_btn"):
-        with st.spinner("分析中..."):
-            st.write_stream(ai_overall_stream())
+    # クイックアクション
+    qa1, qa2, qa3 = st.columns(3)
+    if qa1.button("全タスクを分析", key="qa_analyze", use_container_width=True):
+        st.session_state.ai_pending = "全タスクを分析して、今すぐやるべきトップ3、リスクのあるタスク、担当者の負荷バランス、今週の戦略的アドバイスを教えて。"
+    if qa2.button("期限切れを整理", key="qa_overdue", use_container_width=True):
+        st.session_state.ai_pending = "期限切れのタスクを確認して、対処方法を提案してください。必要に応じて期限の更新もしてください。"
+    if qa3.button("大きいタスクを分解", key="qa_decompose", use_container_width=True):
+        st.session_state.ai_pending = "説明が複雑そうなタスクや大きそうなタスクを見つけて、具体的なサブタスクに分解してください。"
 
     st.markdown("---")
 
-    # 個別タスクへのアドバイス
-    st.markdown("#### 個別タスクへのアドバイス")
-    task_names = {t["id"]: f"[{t['quad']}] {t['name']}" for t in st.session_state.tasks}
-    if not task_names:
-        st.info("タスクがありません")
-        return
+    # チャット初期化
+    if "ai_messages" not in st.session_state:
+        st.session_state.ai_messages = []
+    if "ai_display" not in st.session_state:
+        st.session_state.ai_display = []
 
-    selected_id = st.selectbox(
-        "タスクを選択",
-        options=list(task_names.keys()),
-        format_func=lambda x: task_names[x],
-        key="ai_task_select"
-    )
-    if st.button("このタスクのアドバイスを聞く", key="ai_single_btn"):
-        task = next((t for t in st.session_state.tasks if t["id"] == selected_id), None)
-        if task:
-            with st.spinner("分析中..."):
-                st.write_stream(ai_single_task_stream(task))
+    # チャット履歴表示
+    for msg in st.session_state.ai_display:
+        if msg["role"] == "user":
+            st.chat_message("user").markdown(msg["content"])
+        else:
+            st.chat_message("assistant").markdown(msg["content"])
+
+    # 入力欄
+    user_input = st.chat_input("タスクについて指示してください（例:「来週の会議準備タスクを作って」）")
+
+    # クイックアクションまたはテキスト入力
+    pending = st.session_state.pop("ai_pending", None)
+    msg_to_send = pending or user_input
+
+    if msg_to_send:
+        st.session_state.ai_messages.append({"role": "user", "content": msg_to_send})
+        st.session_state.ai_display.append({"role": "user", "content": msg_to_send})
+        st.chat_message("user").markdown(msg_to_send)
+
+        with st.chat_message("assistant"):
+            with st.spinner("考え中..."):
+                try:
+                    reply, updated_messages = ai_chat_response(st.session_state.ai_messages)
+                    st.session_state.ai_messages = updated_messages
+                    st.session_state.ai_display.append({"role": "assistant", "content": reply})
+                    st.markdown(reply)
+                except Exception as e:
+                    error_msg = f"エラーが発生しました: {str(e)}"
+                    st.error(error_msg)
+                    st.session_state.ai_messages.append({"role": "assistant", "content": [{"type": "text", "text": error_msg}]})
+                    st.session_state.ai_display.append({"role": "assistant", "content": error_msg})
+
+    # チャットリセット
+    if st.session_state.ai_display:
+        if st.button("会話をリセット", key="ai_reset"):
+            st.session_state.ai_messages = []
+            st.session_state.ai_display = []
+            st.rerun()
 
 # ── Supabase ─────────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -1106,14 +1307,18 @@ def main():
                 st.rerun()
         st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル", "AI アドバイス"])
+    # AIチャット
+    with st.container(border=True):
+        render_ai_chat()
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル"])
     filtered = apply_filters(st.session_state.tasks)
 
     with tab1: render_kanban(filtered)
     with tab2: render_matrix(filtered)
     with tab3: render_projects(filtered)
     with tab4: render_table(filtered)
-    with tab5: render_ai(filtered)
 
 if __name__ == "__main__":
     main()
