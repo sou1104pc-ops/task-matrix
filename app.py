@@ -548,6 +548,9 @@ def apply_filters(tasks):
 def render_sidebar():
     st.sidebar.markdown("## TASK·MATRIX")
     st.sidebar.markdown("---")
+    if st.sidebar.button("+ タスクを追加", use_container_width=True, type="primary"):
+        st.session_state["show_add_form"] = not st.session_state.get("show_add_form", False)
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### フィルタ")
 
     if "filters" not in st.session_state:
@@ -570,10 +573,6 @@ def render_sidebar():
                                           default=[member_opts[mid] for mid in f.get("assignees", []) if mid in member_opts])
     f["assignees"] = [mid for mid, mname in member_opts.items() if mname in sel_members]
     f["future_min"] = st.sidebar.slider("未来重要度（最低）", 1, 5, value=f.get("future_min", 1))
-
-    st.sidebar.markdown("---")
-    if st.sidebar.button("+ タスクを追加", use_container_width=True, type="primary"):
-        st.session_state["show_add_form"] = not st.session_state.get("show_add_form", False)
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 管理")
