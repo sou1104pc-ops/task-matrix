@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime, date, timedelta
+import calendar as cal_mod
 from supabase import create_client, Client
 import anthropic
 
@@ -89,6 +90,99 @@ hr { border-color: #2a2a3e !important; }
     color: #e0e0ff;
     border-color: #7b78ff;
 }
+
+.deadline-section {
+    background: #14141f;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+}
+.deadline-header {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.deadline-overdue  .deadline-header { color: #ff5568; }
+.deadline-today    .deadline-header { color: #ffc933; }
+.deadline-tomorrow .deadline-header { color: #48bfe3; }
+
+.deadline-item {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.deadline-overdue .deadline-item  { border-left: 3px solid #ff5568; }
+.deadline-today .deadline-item    { border-left: 3px solid #ffc933; }
+.deadline-tomorrow .deadline-item { border-left: 3px solid #48bfe3; }
+
+.dl-task-name { font-size: 13px; font-weight: 600; color: #e0e0ff; }
+.dl-task-info { font-size: 11px; color: #6060a0; margin-top: 2px; }
+.dl-badge {
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 4px;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+.dl-badge-overdue  { background: #ff556822; color: #ff5568; }
+.dl-badge-today    { background: #ffc93322; color: #ffc933; }
+.dl-badge-tomorrow { background: #48bfe322; color: #48bfe3; }
+
+.cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+}
+.cal-header {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #6060a0;
+    padding: 6px 0;
+}
+.cal-day {
+    background: #1a1a2e;
+    border-radius: 8px;
+    min-height: 80px;
+    padding: 6px 8px;
+    position: relative;
+}
+.cal-day-empty { background: transparent; }
+.cal-day-today { border: 2px solid #7b78ff; }
+.cal-day-num {
+    font-size: 12px;
+    font-weight: 700;
+    color: #6060a0;
+    margin-bottom: 4px;
+}
+.cal-day-today .cal-day-num { color: #7b78ff; }
+.cal-task {
+    font-size: 10px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #e0e0ff;
+}
+
+.repeat-badge {
+    display: inline-block;
+    font-size: 10px;
+    border-radius: 4px;
+    padding: 1px 6px;
+    background: #3a3a5a;
+    color: #a0a0c0;
+    margin-left: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,6 +195,7 @@ QUAD_LABELS = {
     "D": "D — 非重要・非緊急（排除）",
 }
 STATUS_LABELS = {"todo": "未着手", "doing": "進行中", "done": "完了"}
+REPEAT_LABELS = {"none": "なし", "daily": "毎日", "weekly": "毎週", "monthly": "毎月"}
 STARS = {1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
 
 DEFAULT_PROJECTS = [
@@ -404,9 +499,11 @@ def task_card_html(t):
     proj_html = f'<span style="color:{proj["color"]};font-size:10px;">◆ {proj["name"]}</span> ' if proj else ""
     tag = t.get("tag", "")
     tag_html = f'<span style="background:#1e1e3a;color:#6060a0;border-radius:4px;padding:1px 6px;font-size:10px;">{tag}</span>' if tag else ""
+    rpt = t.get("repeat", "none")
+    repeat_html = f'<span class="repeat-badge">{REPEAT_LABELS.get(rpt, "")}</span>' if rpt != "none" else ""
     return f"""
 <div class="task-card quad-{quad}" style="border-left-color:{qcolor}">
-  <div class="task-name">{t['name']}</div>
+  <div class="task-name">{t['name']}{repeat_html}</div>
   <div class="task-meta" style="margin-top:5px;">{proj_html}{tag_html}</div>
   <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
     <span class="{sc}">{sl}</span>
@@ -574,6 +671,12 @@ def render_task_form(task=None, form_key="add_task"):
 
         tag = st.text_input("カテゴリタグ", value=task.get("tag", "") if is_edit else "")
 
+        repeat_opts = list(REPEAT_LABELS.keys())
+        repeat_labels = list(REPEAT_LABELS.values())
+        cur_repeat = task.get("repeat", "none") if is_edit else "none"
+        repeat_sel = st.selectbox("繰り返し", repeat_labels, index=repeat_opts.index(cur_repeat))
+        repeat = repeat_opts[repeat_labels.index(repeat_sel)]
+
         proj_opt_list = [("", "なし")] + build_project_options()
         proj_ids = [pid for pid, _ in proj_opt_list]
         proj_names = [label for _, label in proj_opt_list]
@@ -592,6 +695,7 @@ def render_task_form(task=None, form_key="add_task"):
                     "name": name.strip(), "description": desc, "quad": quad,
                     "future": future, "status": status, "due": due_str,
                     "assignees": assignees, "tag": tag, "project": project,
+                    "repeat": repeat,
                 })
                 db_upsert_task(task)
                 return True
@@ -601,12 +705,135 @@ def render_task_form(task=None, form_key="add_task"):
                     "name": name.strip(), "description": desc, "quad": quad,
                     "future": future, "status": status, "due": due_str,
                     "assignees": assignees, "tag": tag, "project": project,
+                    "repeat": repeat,
                 }
                 db_upsert_task(new_task)
                 st.session_state.tasks.append(new_task)
                 st.session_state.next_id += 1
                 return True
     return False
+
+# ── Deadline alerts ────────────────────────────────────────────────────────────
+def render_deadline_alerts():
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    member_map = {m["id"]: m["name"] for m in st.session_state.members}
+    proj_map = {p["id"]: p["name"] for p in st.session_state.projects}
+
+    overdue = []
+    due_today = []
+    due_tomorrow = []
+
+    for t in st.session_state.tasks:
+        if t["status"] == "done":
+            continue
+        due_str = t.get("due", "")
+        if not due_str:
+            continue
+        try:
+            d = datetime.strptime(due_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d < today:
+            overdue.append(t)
+        elif d == today:
+            due_today.append(t)
+        elif d == tomorrow:
+            due_tomorrow.append(t)
+
+    if not overdue and not due_today and not due_tomorrow:
+        return
+
+    def _item_html(t, category):
+        assignees = ", ".join(member_map.get(a, a) for a in (t.get("assignees") or []))
+        proj = proj_map.get(t.get("project", ""), "")
+        proj_part = f"◆{proj}" if proj else ""
+        quad_label = t.get("quad", "")
+        status_label = STATUS_LABELS.get(t["status"], t["status"])
+        parts = [p for p in [f"{quad_label}象限", status_label, proj_part, assignees] if p]
+        return (
+            f'<div class="deadline-item">'
+            f'  <div><div class="dl-task-name">{t["name"]}</div>'
+            f'  <div class="dl-task-info">{" · ".join(parts)}</div></div>'
+            f'  <div class="dl-badge dl-badge-{category}">{t.get("due","")}</div>'
+            f'</div>'
+        )
+
+    html_parts = []
+
+    if overdue:
+        items = "".join(_item_html(t, "overdue") for t in overdue)
+        html_parts.append(
+            f'<div class="deadline-section deadline-overdue">'
+            f'  <div class="deadline-header">🔴 期限切れ（{len(overdue)}件）</div>'
+            f'  {items}'
+            f'</div>'
+        )
+
+    if due_today:
+        items = "".join(_item_html(t, "today") for t in due_today)
+        html_parts.append(
+            f'<div class="deadline-section deadline-today">'
+            f'  <div class="deadline-header">🟡 今日まで（{len(due_today)}件）</div>'
+            f'  {items}'
+            f'</div>'
+        )
+
+    if due_tomorrow:
+        items = "".join(_item_html(t, "tomorrow") for t in due_tomorrow)
+        html_parts.append(
+            f'<div class="deadline-section deadline-tomorrow">'
+            f'  <div class="deadline-header">🔵 明日まで（{len(due_tomorrow)}件）</div>'
+            f'  {items}'
+            f'</div>'
+        )
+
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+# ── Recurring tasks ────────────────────────────────────────────────────────────
+def process_recurring_tasks():
+    """完了した繰り返しタスクから次回タスクを自動生成"""
+    today = date.today()
+    new_tasks = []
+    for t in st.session_state.tasks:
+        rpt = t.get("repeat", "none")
+        if rpt == "none" or t["status"] != "done":
+            continue
+        # 次回タスクが既に存在するかチェック（名前+repeat+未完了）
+        already = any(
+            x["name"] == t["name"] and x.get("repeat") == rpt and x["status"] != "done"
+            for x in st.session_state.tasks
+        )
+        if already:
+            continue
+        # 次回締切を計算
+        try:
+            old_due = datetime.strptime(t["due"], "%Y-%m-%d").date() if t.get("due") else today
+        except ValueError:
+            old_due = today
+        if rpt == "daily":
+            next_due = max(old_due + timedelta(days=1), today)
+        elif rpt == "weekly":
+            next_due = max(old_due + timedelta(weeks=1), today)
+        elif rpt == "monthly":
+            m = old_due.month % 12 + 1
+            y = old_due.year + (1 if old_due.month == 12 else 0)
+            d = min(old_due.day, cal_mod.monthrange(y, m)[1])
+            next_due = max(date(y, m, d), today)
+        else:
+            continue
+        new_task = {
+            "id": st.session_state.next_id,
+            "name": t["name"], "description": t.get("description", ""),
+            "quad": t["quad"], "future": t.get("future", 3),
+            "status": "todo", "due": next_due.strftime("%Y-%m-%d"),
+            "assignees": t.get("assignees", []), "tag": t.get("tag", ""),
+            "project": t.get("project", ""), "repeat": rpt,
+        }
+        db_upsert_task(new_task)
+        new_tasks.append(new_task)
+        st.session_state.next_id += 1
+    st.session_state.tasks.extend(new_tasks)
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 def render_stats(tasks_all):
@@ -657,6 +884,102 @@ def render_matrix(tasks):
                             st.session_state[f"edit_open_{t['id']}"] = False
                             st.rerun()
 
+# ── Calendar view ─────────────────────────────────────────────────────────────
+def render_calendar(tasks):
+    today = date.today()
+    col_prev, col_title, col_next = st.columns([1, 3, 1])
+    cal_year = st.session_state.get("cal_year", today.year)
+    cal_month = st.session_state.get("cal_month", today.month)
+
+    with col_prev:
+        if st.button("< 前月", key="cal_prev"):
+            if cal_month == 1:
+                cal_month, cal_year = 12, cal_year - 1
+            else:
+                cal_month -= 1
+            st.session_state.cal_year = cal_year
+            st.session_state.cal_month = cal_month
+            st.rerun()
+    with col_title:
+        st.markdown(f"### {cal_year}年 {cal_month}月")
+    with col_next:
+        if st.button("翌月 >", key="cal_next"):
+            if cal_month == 12:
+                cal_month, cal_year = 1, cal_year + 1
+            else:
+                cal_month += 1
+            st.session_state.cal_year = cal_year
+            st.session_state.cal_month = cal_month
+            st.rerun()
+
+    # タスクを日付でグループ化
+    tasks_by_date = {}
+    for t in tasks:
+        due_str = t.get("due", "")
+        if not due_str:
+            continue
+        try:
+            d = datetime.strptime(due_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d.year == cal_year and d.month == cal_month:
+            tasks_by_date.setdefault(d.day, []).append(t)
+
+    # カレンダーグリッド生成
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    header_html = "".join(f'<div class="cal-header">{wd}</div>' for wd in weekdays)
+
+    first_weekday, num_days = cal_mod.monthrange(cal_year, cal_month)
+    # cal_mod.monthrange returns (weekday_of_first_day, num_days)
+    # weekday: 0=Mon, 6=Sun
+
+    cells = []
+    # 空セル（月初の曜日まで）
+    for _ in range(first_weekday):
+        cells.append('<div class="cal-day cal-day-empty"></div>')
+
+    for day in range(1, num_days + 1):
+        is_today = (cal_year == today.year and cal_month == today.month and day == today.day)
+        today_cls = " cal-day-today" if is_today else ""
+        day_tasks = tasks_by_date.get(day, [])
+        task_items = ""
+        for t in day_tasks[:4]:
+            qcolor = QUAD_COLORS.get(t.get("quad", "D"), "#44445a")
+            status = t.get("status", "todo")
+            opacity = "0.4" if status == "done" else "1"
+            task_items += (
+                f'<div class="cal-task" style="background:{qcolor}33;border-left:3px solid {qcolor};opacity:{opacity};">'
+                f'{t["name"]}'
+                f'</div>'
+            )
+        if len(day_tasks) > 4:
+            task_items += f'<div style="font-size:10px;color:#6060a0;">+{len(day_tasks)-4}件</div>'
+        cells.append(
+            f'<div class="cal-day{today_cls}">'
+            f'<div class="cal-day-num">{day}</div>'
+            f'{task_items}'
+            f'</div>'
+        )
+
+    # 残り空セル
+    total_cells = len(cells)
+    remainder = total_cells % 7
+    if remainder:
+        for _ in range(7 - remainder):
+            cells.append('<div class="cal-day cal-day-empty"></div>')
+
+    grid_html = f'<div class="cal-grid">{header_html}{"".join(cells)}</div>'
+    st.markdown(grid_html, unsafe_allow_html=True)
+
+    # 当月のタスク一覧
+    month_tasks = [t for t in tasks if t.get("due", "").startswith(f"{cal_year}-{cal_month:02d}")]
+    month_tasks.sort(key=lambda t: t.get("due", ""))
+    if month_tasks:
+        st.markdown("---")
+        st.markdown(f"#### {cal_month}月のタスク一覧")
+        for t in month_tasks:
+            st.markdown(task_card_html(t), unsafe_allow_html=True)
+
 # ── Project view ──────────────────────────────────────────────────────────────
 def render_projects(_tasks):
     for p in get_top_level_projects():
@@ -693,6 +1016,21 @@ def render_projects(_tasks):
 </div>
 """, unsafe_allow_html=True)
         st.progress(ratio, text=f"{int(ratio*100)}%")
+
+        if p_tasks:
+            active = [t for t in p_tasks if t["status"] != "done"]
+            done_tasks = [t for t in p_tasks if t["status"] == "done"]
+            active.sort(key=lambda t: t.get("due", "9999"))
+
+            if active:
+                for t in active:
+                    st.markdown(task_card_html(t), unsafe_allow_html=True)
+            if done_tasks:
+                with st.expander(f"完了済み（{len(done_tasks)}件）"):
+                    for t in done_tasks:
+                        st.markdown(task_card_html(t), unsafe_allow_html=True)
+        else:
+            st.caption("タスクなし")
         st.markdown("---")
 
 # ── Table view ────────────────────────────────────────────────────────────────
@@ -719,11 +1057,13 @@ def render_table(tasks):
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     init_state()
+    process_recurring_tasks()
     render_sidebar()
 
     st.markdown("# TASK·MATRIX")
     st.markdown("アイゼンハワーマトリクス × 未来重要度 タスク管理")
     st.markdown("---")
+    render_deadline_alerts()
     render_stats(st.session_state.tasks)
     st.markdown("---")
 
@@ -736,14 +1076,15 @@ def main():
                 st.rerun()
         st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル", "AI アドバイス"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["カンバン", "マトリクス", "カレンダー", "プロジェクト", "テーブル", "AI アドバイス"])
     filtered = apply_filters(st.session_state.tasks)
 
     with tab1: render_kanban(filtered)
     with tab2: render_matrix(filtered)
-    with tab3: render_projects(filtered)
-    with tab4: render_table(filtered)
-    with tab5: render_ai(filtered)
+    with tab3: render_calendar(filtered)
+    with tab4: render_projects(filtered)
+    with tab5: render_table(filtered)
+    with tab6: render_ai(filtered)
 
 if __name__ == "__main__":
     main()
