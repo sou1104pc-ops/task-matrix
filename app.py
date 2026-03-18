@@ -191,6 +191,41 @@ hr { border-color: #e8e8e5 !important; }
     color: #9b9a97;
     margin-left: 4px;
 }
+
+.secretary-card {
+    background: linear-gradient(135deg, #faf9f7 0%, #f3f0ff 100%);
+    border-radius: 12px;
+    padding: 20px 24px;
+    border: 1px solid #e0daf5;
+    margin-bottom: 8px;
+}
+.secretary-greeting {
+    font-size: 18px;
+    font-weight: 700;
+    color: #37352f;
+    margin-bottom: 4px;
+}
+.secretary-sub {
+    font-size: 13px;
+    color: #9b9a97;
+    margin-bottom: 16px;
+}
+.secretary-section {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    border: 1px solid #e8e8e5;
+}
+.secretary-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #6940a5;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -501,6 +536,123 @@ def ai_chat_response(messages):
     # テキスト部分を結合して返す
     text_parts = [b.text for b in response.content if hasattr(b, "text")]
     return "\n".join(text_parts), messages + [{"role": "assistant", "content": response.content}]
+
+# ── Secretary Agent ────────────────────────────────────────────────────────────
+def _build_secretary_prompt():
+    """秘書エージェント用のシステムプロンプトを構築"""
+    today = date.today()
+    tasks = st.session_state.tasks
+    member_map = {m["id"]: m["name"] for m in st.session_state.members}
+    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
+
+    overdue, due_today, due_tomorrow, doing, upcoming_week = [], [], [], [], []
+    for t in tasks:
+        if t.get("status") == "done":
+            continue
+        due = t.get("due", "")
+        if due:
+            try:
+                d = datetime.strptime(due, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            delta = (d - today).days
+            if delta < 0:
+                overdue.append(t)
+            elif delta == 0:
+                due_today.append(t)
+            elif delta == 1:
+                due_tomorrow.append(t)
+            elif delta <= 7:
+                upcoming_week.append(t)
+        if t.get("status") == "doing":
+            doing.append(t)
+
+    def _fmt(t):
+        assignees = ", ".join(member_map.get(a, a) for a in t.get("assignees", []))
+        proj = project_map.get(t.get("project", ""), "")
+        return (
+            f"  - [{t.get('quad','?')}] {t['name']} | 期限:{t.get('due','未設定')} | "
+            f"状態:{t.get('status','todo')} | 未来重要度:{'★'*t.get('future',1)} | "
+            f"担当:{assignees or 'なし'} | プロジェクト:{proj or 'なし'} | タグ:{t.get('tag','')}"
+        )
+
+    sections = []
+    if overdue:
+        sections.append("【期限超過タスク】\n" + "\n".join(_fmt(t) for t in overdue))
+    if due_today:
+        sections.append("【本日期限のタスク】\n" + "\n".join(_fmt(t) for t in due_today))
+    if doing:
+        sections.append("【進行中のタスク】\n" + "\n".join(_fmt(t) for t in doing))
+    if due_tomorrow:
+        sections.append("【明日期限のタスク】\n" + "\n".join(_fmt(t) for t in due_tomorrow))
+    if upcoming_week:
+        sections.append("【今週中のタスク】\n" + "\n".join(_fmt(t) for t in upcoming_week))
+
+    all_incomplete = [t for t in tasks if t.get("status") != "done"]
+    quad_a = [t for t in all_incomplete if t.get("quad") == "A"]
+    if quad_a:
+        sections.append("【重要&緊急 (A) タスク一覧】\n" + "\n".join(_fmt(t) for t in quad_a))
+
+    task_data = "\n\n".join(sections) if sections else "（未完了タスクはありません）"
+
+    return (
+        f"あなたは優秀な秘書AIです。今日は{today.strftime('%Y年%m月%d日（%A）')}です。\n"
+        "以下のタスクデータをもとに、ユーザーが今日何をすべきかをブリーフィングしてください。\n\n"
+        "## 出力フォーマット\n"
+        "1. **おはようございます** — 一言の挨拶（簡潔に）\n"
+        "2. **本日の優先アクション** — 今日やるべきことを優先順に3〜5件。具体的なアクション（「〇〇を確認する」「〇〇に連絡する」等）で書く\n"
+        "3. **注意事項** — 期限超過タスクがあれば警告、負荷の偏りがあれば指摘\n"
+        "4. **明日以降の準備** — 明日・今週中に備えて今日着手すべきこと（あれば）\n\n"
+        "## ルール\n"
+        "- 簡潔で実用的に。冗長な説明は不要\n"
+        "- 各アクションには該当タスク名を含める\n"
+        "- 期限超過は最優先で扱う\n"
+        "- quad A（重要&緊急）> doing（進行中）> 本日期限 の順で優先\n"
+        "- Markdown形式で出力\n\n"
+        f"## タスクデータ\n{task_data}"
+    )
+
+
+def render_secretary():
+    """秘書エージェントのブリーフィングを表示"""
+    st.markdown("### 📋 秘書エージェント")
+
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        run_briefing = st.button("今日のブリーフィング", key="secretary_run", use_container_width=True)
+    with col2:
+        st.markdown("<span style='font-size:12px;color:#9b9a97;'>タスク状況を分析して、今日やるべきことを教えます</span>", unsafe_allow_html=True)
+
+    if "secretary_result" not in st.session_state:
+        st.session_state.secretary_result = None
+
+    if run_briefing:
+        with st.spinner("タスクを分析中..."):
+            try:
+                client = get_anthropic_client()
+                system_prompt = _build_secretary_prompt()
+                response = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=2048,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": "今日のブリーフィングをお願いします。"}],
+                )
+                text = "\n".join(b.text for b in response.content if hasattr(b, "text"))
+                st.session_state.secretary_result = text
+            except Exception as e:
+                st.session_state.secretary_result = f"エラーが発生しました: {str(e)}"
+        st.rerun()
+
+    if st.session_state.secretary_result:
+        st.markdown(
+            f'<div class="secretary-card">{""}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(st.session_state.secretary_result)
+        if st.button("閉じる", key="secretary_close"):
+            st.session_state.secretary_result = None
+            st.rerun()
+
 
 # ── AI view ───────────────────────────────────────────────────────────────────
 def render_ai_chat():
@@ -1330,6 +1482,11 @@ def main():
                 st.session_state["show_add_form"] = False
                 st.rerun()
         st.markdown("---")
+
+    # 秘書エージェント
+    with st.container(border=True):
+        render_secretary()
+    st.markdown("---")
 
     # AIチャット
     with st.container(border=True):
