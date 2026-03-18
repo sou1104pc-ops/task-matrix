@@ -211,6 +211,7 @@ DEFAULT_PROJECTS = [
     {"id": "p2", "name": "姫路民泊投資", "description": "姫路城周辺の短期賃貸物件の取得・運営", "color": "#ffc933", "parent": ""},
     {"id": "p3", "name": "M&A・事業売却", "description": "3年以内に約1億円での事業売却を目指す", "color": "#2ecc71", "parent": ""},
     {"id": "p4", "name": "スタジオ運営改善", "description": "各拠点のオペレーション効率化・品質向上", "color": "#48bfe3", "parent": ""},
+    {"id": "p5", "name": "Brain制作代行", "description": "Brain教材の制作代行サービス", "color": "#ff6b6b", "parent": ""},
 ]
 
 DEFAULT_MEMBERS = [
