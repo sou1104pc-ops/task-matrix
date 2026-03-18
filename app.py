@@ -14,31 +14,33 @@ st.set_page_config(
 # ── Custom CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stAppViewContainer"] { background: #0e0e1a; }
-[data-testid="stSidebar"] { background: #14141f; }
-section[data-testid="stSidebar"] > div { background: #14141f; }
-h1,h2,h3,h4 { color: #e0e0ff !important; }
-label, .stMarkdown p { color: #a0a0c0 !important; }
+[data-testid="stAppViewContainer"] { background: #ffffff; }
+[data-testid="stSidebar"] { background: #fbfbfa; border-right: 1px solid #e8e8e5; }
+section[data-testid="stSidebar"] > div { background: #fbfbfa; }
+h1,h2,h3,h4 { color: #37352f !important; }
+label, .stMarkdown p { color: #6b6b6b !important; }
 
 .task-card {
-    background: #1a1a2e;
-    border-radius: 10px;
+    background: #ffffff;
+    border-radius: 8px;
     padding: 12px 14px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     border-left: 4px solid #7b78ff;
-    transition: transform .15s;
+    border: 1px solid #e8e8e5;
+    border-left: 4px solid #7b78ff;
+    transition: background .15s;
 }
-.task-card:hover { transform: translateX(3px); }
-.task-card .task-name { font-size: 14px; font-weight: 600; color: #e0e0ff; }
-.task-card .task-meta { font-size: 11px; color: #6060a0; margin-top: 4px; }
-.task-card .task-due-ok   { color: #2ecc71; font-size: 11px; }
-.task-card .task-due-warn { color: #ffc933; font-size: 11px; }
-.task-card .task-due-over { color: #ff5568; font-size: 11px; }
+.task-card:hover { background: #f7f7f5; }
+.task-card .task-name { font-size: 14px; font-weight: 600; color: #37352f; }
+.task-card .task-meta { font-size: 11px; color: #9b9a97; margin-top: 4px; }
+.task-card .task-due-ok   { color: #0f7b6c; font-size: 11px; }
+.task-card .task-due-warn { color: #d9730d; font-size: 11px; }
+.task-card .task-due-over { color: #e03e3e; font-size: 11px; }
 
-.quad-A { border-left-color: #ff5568 !important; }
-.quad-B { border-left-color: #7b78ff !important; }
-.quad-C { border-left-color: #ffc933 !important; }
-.quad-D { border-left-color: #44445a !important; }
+.quad-A { border-left-color: #e03e3e !important; }
+.quad-B { border-left-color: #6940a5 !important; }
+.quad-C { border-left-color: #d9730d !important; }
+.quad-D { border-left-color: #c4c4c0 !important; }
 
 .quad-badge {
     display: inline-block;
@@ -48,21 +50,23 @@ label, .stMarkdown p { color: #a0a0c0 !important; }
     font-weight: 700;
     margin-bottom: 8px;
 }
-.badge-A { background: #ff556822; color: #ff5568; }
-.badge-B { background: #7b78ff22; color: #7b78ff; }
-.badge-C { background: #ffc93322; color: #ffc933; }
-.badge-D { background: #44445a44; color: #888; }
+.badge-A { background: #fbe4e4; color: #e03e3e; }
+.badge-B { background: #eae4f8; color: #6940a5; }
+.badge-C { background: #fbecdb; color: #d9730d; }
+.badge-D { background: #f1f1ef; color: #9b9a97; }
 
-.status-todo  { background:#2a2a3a; color:#888; border-radius:4px; padding:1px 7px; font-size:11px; }
-.status-doing { background:#7b78ff22; color:#7b78ff; border-radius:4px; padding:1px 7px; font-size:11px; }
-.status-done  { background:#2ecc7122; color:#2ecc71; border-radius:4px; padding:1px 7px; font-size:11px; }
+.status-todo  { background:#f1f1ef; color:#787774; border-radius:4px; padding:1px 7px; font-size:11px; }
+.status-doing { background:#eae4f8; color:#6940a5; border-radius:4px; padding:1px 7px; font-size:11px; }
+.status-done  { background:#dbeddb; color:#0f7b6c; border-radius:4px; padding:1px 7px; font-size:11px; }
 
 .proj-card {
-    background: #1a1a2e;
-    border-radius: 10px;
+    background: #ffffff;
+    border-radius: 8px;
     padding: 14px 16px;
     margin-bottom: 12px;
-    border-top: 3px solid #7b78ff;
+    border-top: 3px solid #6940a5;
+    border: 1px solid #e8e8e5;
+    border-top: 3px solid #6940a5;
 }
 .col-header {
     text-align: center;
@@ -74,28 +78,30 @@ label, .stMarkdown p { color: #a0a0c0 !important; }
     margin-bottom: 12px;
 }
 [data-testid="metric-container"] {
-    background: #1a1a2e;
-    border-radius: 10px;
+    background: #ffffff;
+    border-radius: 8px;
     padding: 12px 16px;
+    border: 1px solid #e8e8e5;
 }
-hr { border-color: #2a2a3e !important; }
+hr { border-color: #e8e8e5 !important; }
 .stButton > button {
-    background: #1a1a2e;
-    color: #a0a0c0;
-    border: 1px solid #2a2a3e;
+    background: #ffffff;
+    color: #37352f;
+    border: 1px solid #e8e8e5;
     border-radius: 6px;
 }
 .stButton > button:hover {
-    background: #24243a;
-    color: #e0e0ff;
-    border-color: #7b78ff;
+    background: #f7f7f5;
+    color: #37352f;
+    border-color: #d3d3d0;
 }
 
 .deadline-section {
-    background: #14141f;
-    border-radius: 12px;
+    background: #fbfbfa;
+    border-radius: 10px;
     padding: 16px 20px;
     margin-bottom: 8px;
+    border: 1px solid #e8e8e5;
 }
 .deadline-header {
     font-size: 14px;
@@ -105,25 +111,26 @@ hr { border-color: #2a2a3e !important; }
     align-items: center;
     gap: 8px;
 }
-.deadline-overdue  .deadline-header { color: #ff5568; }
-.deadline-today    .deadline-header { color: #ffc933; }
-.deadline-tomorrow .deadline-header { color: #48bfe3; }
+.deadline-overdue  .deadline-header { color: #e03e3e; }
+.deadline-today    .deadline-header { color: #d9730d; }
+.deadline-tomorrow .deadline-header { color: #2f80ed; }
 
 .deadline-item {
-    background: #1a1a2e;
+    background: #ffffff;
     border-radius: 8px;
     padding: 10px 14px;
     margin-bottom: 6px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    border: 1px solid #e8e8e5;
 }
-.deadline-overdue .deadline-item  { border-left: 3px solid #ff5568; }
-.deadline-today .deadline-item    { border-left: 3px solid #ffc933; }
-.deadline-tomorrow .deadline-item { border-left: 3px solid #48bfe3; }
+.deadline-overdue .deadline-item  { border-left: 3px solid #e03e3e; }
+.deadline-today .deadline-item    { border-left: 3px solid #d9730d; }
+.deadline-tomorrow .deadline-item { border-left: 3px solid #2f80ed; }
 
-.dl-task-name { font-size: 13px; font-weight: 600; color: #e0e0ff; }
-.dl-task-info { font-size: 11px; color: #6060a0; margin-top: 2px; }
+.dl-task-name { font-size: 13px; font-weight: 600; color: #37352f; }
+.dl-task-info { font-size: 11px; color: #9b9a97; margin-top: 2px; }
 .dl-badge {
     font-size: 11px;
     font-weight: 700;
@@ -131,9 +138,9 @@ hr { border-color: #2a2a3e !important; }
     padding: 2px 8px;
     white-space: nowrap;
 }
-.dl-badge-overdue  { background: #ff556822; color: #ff5568; }
-.dl-badge-today    { background: #ffc93322; color: #ffc933; }
-.dl-badge-tomorrow { background: #48bfe322; color: #48bfe3; }
+.dl-badge-overdue  { background: #fbe4e4; color: #e03e3e; }
+.dl-badge-today    { background: #fbecdb; color: #d9730d; }
+.dl-badge-tomorrow { background: #d6e6ff; color: #2f80ed; }
 
 .cal-grid {
     display: grid;
@@ -144,25 +151,26 @@ hr { border-color: #2a2a3e !important; }
     text-align: center;
     font-size: 12px;
     font-weight: 700;
-    color: #6060a0;
+    color: #9b9a97;
     padding: 6px 0;
 }
 .cal-day {
-    background: #1a1a2e;
+    background: #ffffff;
     border-radius: 8px;
     min-height: 80px;
     padding: 6px 8px;
     position: relative;
+    border: 1px solid #e8e8e5;
 }
-.cal-day-empty { background: transparent; }
-.cal-day-today { border: 2px solid #7b78ff; }
+.cal-day-empty { background: transparent; border-color: transparent; }
+.cal-day-today { border: 2px solid #6940a5; }
 .cal-day-num {
     font-size: 12px;
     font-weight: 700;
-    color: #6060a0;
+    color: #9b9a97;
     margin-bottom: 4px;
 }
-.cal-day-today .cal-day-num { color: #7b78ff; }
+.cal-day-today .cal-day-num { color: #6940a5; }
 .cal-task {
     font-size: 10px;
     padding: 2px 5px;
@@ -171,7 +179,7 @@ hr { border-color: #2a2a3e !important; }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: #e0e0ff;
+    color: #37352f;
 }
 
 .repeat-badge {
@@ -179,15 +187,15 @@ hr { border-color: #2a2a3e !important; }
     font-size: 10px;
     border-radius: 4px;
     padding: 1px 6px;
-    background: #3a3a5a;
-    color: #a0a0c0;
+    background: #f1f1ef;
+    color: #9b9a97;
     margin-left: 4px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Constants ───────────────────────────────────────────────────────────────
-QUAD_COLORS = {"A": "#ff5568", "B": "#7b78ff", "C": "#ffc933", "D": "#44445a"}
+QUAD_COLORS = {"A": "#e03e3e", "B": "#6940a5", "C": "#d9730d", "D": "#c4c4c0"}
 QUAD_LABELS = {
     "A": "A — 重要・緊急（すぐやる）",
     "B": "B — 重要・非緊急（計画する）",
@@ -691,7 +699,7 @@ def task_card_html(t):
     due_cls, due_label = due_class(t.get("due", ""))
     stars = STARS.get(t.get("future", 1), "")
     quad = t.get("quad", "D")
-    qcolor = QUAD_COLORS.get(quad, "#44445a")
+    qcolor = QUAD_COLORS.get(quad, "#c4c4c0")
     status = t.get("status", "todo")
     sc = f"status-{status}"
     sl = STATUS_LABELS.get(status, status)
@@ -699,7 +707,7 @@ def task_card_html(t):
     proj = get_project(t.get("project", ""))
     proj_html = f'<span style="color:{proj["color"]};font-size:10px;">◆ {proj["name"]}</span> ' if proj else ""
     tag = t.get("tag", "")
-    tag_html = f'<span style="background:#1e1e3a;color:#6060a0;border-radius:4px;padding:1px 6px;font-size:10px;">{tag}</span>' if tag else ""
+    tag_html = f'<span style="background:#f1f1ef;color:#9b9a97;border-radius:4px;padding:1px 6px;font-size:10px;">{tag}</span>' if tag else ""
     rpt = t.get("repeat", "none")
     repeat_html = f'<span class="repeat-badge">{REPEAT_LABELS.get(rpt, "")}</span>' if rpt != "none" else ""
     return f"""
@@ -1046,9 +1054,9 @@ def render_stats(tasks_all):
 # ── Kanban view ───────────────────────────────────────────────────────────────
 def render_kanban(tasks):
     cols = st.columns(3)
-    for i, (skey, slabel, scolor) in enumerate([("todo", "未着手", "#888"), ("doing", "進行中", "#7b78ff"), ("done", "完了", "#2ecc71")]):
+    for i, (skey, slabel, scolor) in enumerate([("todo", "未着手", "#787774"), ("doing", "進行中", "#6940a5"), ("done", "完了", "#0f7b6c")]):
         with cols[i]:
-            st.markdown(f'<div class="col-header" style="background:#1a1a2e;color:{scolor};">{slabel}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="col-header" style="background:#f7f7f5;color:{scolor};border:1px solid #e8e8e5;">{slabel}</div>', unsafe_allow_html=True)
             for t in [t for t in tasks if t["status"] == skey]:
                 st.markdown(task_card_html(t), unsafe_allow_html=True)
                 if t["status"] != "done":
@@ -1170,7 +1178,7 @@ def render_calendar(tasks):
         day_tasks = tasks_by_date.get(day, [])
         task_items = ""
         for t in day_tasks[:4]:
-            qcolor = QUAD_COLORS.get(t.get("quad", "D"), "#44445a")
+            qcolor = QUAD_COLORS.get(t.get("quad", "D"), "#c4c4c0")
             status = t.get("status", "todo")
             opacity = "0.4" if status == "done" else "1"
             task_items += (
@@ -1179,7 +1187,7 @@ def render_calendar(tasks):
                 f'</div>'
             )
         if len(day_tasks) > 4:
-            task_items += f'<div style="font-size:10px;color:#6060a0;">+{len(day_tasks)-4}件</div>'
+            task_items += f'<div style="font-size:10px;color:#9b9a97;">+{len(day_tasks)-4}件</div>'
         cells.append(
             f'<div class="cal-day{today_cls}">'
             f'<div class="cal-day-num">{day}</div>'
@@ -1229,7 +1237,7 @@ def render_projects(_tasks):
     <span style="color:{p['color']};font-weight:700;font-size:15px;">◆ {p['name']}</span>
     <span style="color:#888;font-size:12px;">{done}/{total} 完了</span>
   </div>
-  <div style="color:#6060a0;font-size:12px;margin-top:4px;">{p.get('description','')}</div>
+  <div style="color:#9b9a97;font-size:12px;margin-top:4px;">{p.get('description','')}</div>
 </div>
 """, unsafe_allow_html=True)
         st.progress(ratio, text=f"{int(ratio*100)}%")
@@ -1250,8 +1258,8 @@ def render_projects(_tasks):
                 st.markdown(
                     f'<div style="display:flex;align-items:center;gap:8px;margin-top:12px;margin-bottom:6px;">'
                     f'<span style="color:{c["color"]};font-size:14px;">●</span>'
-                    f'<span style="color:#e0e0ff;font-weight:600;font-size:14px;">{c["name"]}</span>'
-                    f'<span style="color:#6060a0;font-size:11px;">{c_done}/{c_total} ({c_pct}%)</span>'
+                    f'<span style="color:#37352f;font-weight:600;font-size:14px;">{c["name"]}</span>'
+                    f'<span style="color:#9b9a97;font-size:11px;">{c_done}/{c_total} ({c_pct}%)</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
