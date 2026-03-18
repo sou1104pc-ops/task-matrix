@@ -588,8 +588,16 @@ def db_load():
 
     return tasks, projects, members
 
+TASK_COLUMNS = {"id", "name", "description", "quad", "future", "status", "due", "assignees", "tag", "project", "repeat"}
+
 def db_upsert_task(task):
-    get_supabase().table("tasks").upsert(task).execute()
+    filtered = {k: v for k, v in task.items() if k in TASK_COLUMNS}
+    try:
+        get_supabase().table("tasks").upsert(filtered).execute()
+    except Exception:
+        # repeatカラムが未作成の場合はrepeatを除外してリトライ
+        filtered.pop("repeat", None)
+        get_supabase().table("tasks").upsert(filtered).execute()
 
 def db_delete_task(task_id):
     get_supabase().table("tasks").delete().eq("id", task_id).execute()
