@@ -481,25 +481,86 @@ def _exec_tool(name, inp):
 
     return "不明なツールです"
 
-def ai_chat_response(messages):
-    """AIチャットレスポンス（ツール使用対応）"""
-    client = get_anthropic_client()
+# ── Secretary Agent ────────────────────────────────────────────────────────────
+def _build_secretary_system():
+    """秘書エージェント用のシステムプロンプトを構築（ツール付き）"""
+    today = date.today()
     context = build_task_context()
-    member_map = {m["id"]: m["name"] for m in st.session_state.members}
-    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
-
     member_info = "\n".join(f"- ID: {m['id']} / 名前: {m['name']}" for m in st.session_state.members)
     project_info = "\n".join(f"- ID: {p['id']} / 名前: {p['name']}" for p in st.session_state.projects)
 
-    system_prompt = (
-        "あなたはタスク管理AIアシスタントです。日本語で応答してください。\n"
-        "ユーザーの依頼に応じて、タスクの作成・完了・分解・更新・削除ができます。\n"
-        "ツールを使って実際にタスクを操作してください。\n"
-        "分析やアドバイスを求められた場合は、現在のタスク状況を基に回答してください。\n\n"
+    # 期限分類サマリーを構築
+    member_map = {m["id"]: m["name"] for m in st.session_state.members}
+    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
+    tasks = st.session_state.tasks
+
+    overdue, due_today, due_tomorrow, doing, upcoming_week = [], [], [], [], []
+    member_load = {}
+    for t in tasks:
+        if t.get("status") == "done":
+            continue
+        for a in t.get("assignees", []):
+            member_load[a] = member_load.get(a, 0) + 1
+        due = t.get("due", "")
+        if due:
+            try:
+                d = datetime.strptime(due, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            delta = (d - today).days
+            if delta < 0:
+                overdue.append(t)
+            elif delta == 0:
+                due_today.append(t)
+            elif delta == 1:
+                due_tomorrow.append(t)
+            elif delta <= 7:
+                upcoming_week.append(t)
+        if t.get("status") == "doing":
+            doing.append(t)
+
+    load_summary = "\n".join(
+        f"- {member_map.get(mid, mid)}: 未完了 {cnt}件"
+        for mid, cnt in sorted(member_load.items(), key=lambda x: -x[1])
+    )
+
+    deadline_summary = (
+        f"期限超過: {len(overdue)}件 / 本日期限: {len(due_today)}件 / "
+        f"明日期限: {len(due_tomorrow)}件 / 今週中: {len(upcoming_week)}件 / "
+        f"進行中: {len(doing)}件"
+    )
+
+    return (
+        f"あなたは優秀な秘書AIです。今日は{today.strftime('%Y年%m月%d日（%A）')}です。\n"
+        "ユーザーのタスク管理を全面的にサポートします。\n\n"
+        "## あなたの役割\n"
+        "- **ブリーフィング**: 今日やるべきことを優先順に整理して伝える\n"
+        "- **タスク操作**: ツールを使ってタスクの作成・完了・分解・更新・削除を実行する\n"
+        "- **分析・提案**: 負荷バランス、リスク、戦略的アドバイスを提供する\n"
+        "- **スケジュール管理**: 期限の調整や優先度の見直しを提案する\n\n"
+        "## ブリーフィング時のフォーマット\n"
+        "1. 一言の挨拶（簡潔に）\n"
+        "2. **本日の優先アクション** — 3〜5件を優先順に。具体的なアクションで書く\n"
+        "3. **注意事項** — 期限超過警告、負荷の偏り\n"
+        "4. **明日以降の準備** — 今日着手すべき先回り事項\n\n"
+        "## ルール\n"
+        "- 秘書として丁寧だが簡潔に。冗長な説明は不要\n"
+        "- タスク操作を依頼されたらツールを使って実際に実行する\n"
+        "- 期限超過は最優先で扱う\n"
+        "- 優先順: quad A（重要&緊急）> doing（進行中）> 本日期限\n"
+        "- Markdown形式で出力\n\n"
+        f"## 現在の状況サマリー\n{deadline_summary}\n\n"
+        f"## メンバー負荷\n{load_summary}\n\n"
         f"## メンバー一覧\n{member_info}\n\n"
         f"## プロジェクト一覧\n{project_info}\n\n"
         f"{context}"
     )
+
+
+def secretary_chat_response(messages):
+    """秘書エージェントのチャットレスポンス（ツール使用対応）"""
+    client = get_anthropic_client()
+    system_prompt = _build_secretary_system()
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -533,187 +594,76 @@ def ai_chat_response(messages):
             messages=messages,
         )
 
-    # テキスト部分を結合して返す
     text_parts = [b.text for b in response.content if hasattr(b, "text")]
     return "\n".join(text_parts), messages + [{"role": "assistant", "content": response.content}]
 
-# ── Secretary Agent ────────────────────────────────────────────────────────────
-def _build_secretary_prompt():
-    """秘書エージェント用のシステムプロンプトを構築"""
-    today = date.today()
-    tasks = st.session_state.tasks
-    member_map = {m["id"]: m["name"] for m in st.session_state.members}
-    project_map = {p["id"]: p["name"] for p in st.session_state.projects}
-
-    overdue, due_today, due_tomorrow, doing, upcoming_week = [], [], [], [], []
-    for t in tasks:
-        if t.get("status") == "done":
-            continue
-        due = t.get("due", "")
-        if due:
-            try:
-                d = datetime.strptime(due, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            delta = (d - today).days
-            if delta < 0:
-                overdue.append(t)
-            elif delta == 0:
-                due_today.append(t)
-            elif delta == 1:
-                due_tomorrow.append(t)
-            elif delta <= 7:
-                upcoming_week.append(t)
-        if t.get("status") == "doing":
-            doing.append(t)
-
-    def _fmt(t):
-        assignees = ", ".join(member_map.get(a, a) for a in t.get("assignees", []))
-        proj = project_map.get(t.get("project", ""), "")
-        return (
-            f"  - [{t.get('quad','?')}] {t['name']} | 期限:{t.get('due','未設定')} | "
-            f"状態:{t.get('status','todo')} | 未来重要度:{'★'*t.get('future',1)} | "
-            f"担当:{assignees or 'なし'} | プロジェクト:{proj or 'なし'} | タグ:{t.get('tag','')}"
-        )
-
-    sections = []
-    if overdue:
-        sections.append("【期限超過タスク】\n" + "\n".join(_fmt(t) for t in overdue))
-    if due_today:
-        sections.append("【本日期限のタスク】\n" + "\n".join(_fmt(t) for t in due_today))
-    if doing:
-        sections.append("【進行中のタスク】\n" + "\n".join(_fmt(t) for t in doing))
-    if due_tomorrow:
-        sections.append("【明日期限のタスク】\n" + "\n".join(_fmt(t) for t in due_tomorrow))
-    if upcoming_week:
-        sections.append("【今週中のタスク】\n" + "\n".join(_fmt(t) for t in upcoming_week))
-
-    all_incomplete = [t for t in tasks if t.get("status") != "done"]
-    quad_a = [t for t in all_incomplete if t.get("quad") == "A"]
-    if quad_a:
-        sections.append("【重要&緊急 (A) タスク一覧】\n" + "\n".join(_fmt(t) for t in quad_a))
-
-    task_data = "\n\n".join(sections) if sections else "（未完了タスクはありません）"
-
-    return (
-        f"あなたは優秀な秘書AIです。今日は{today.strftime('%Y年%m月%d日（%A）')}です。\n"
-        "以下のタスクデータをもとに、ユーザーが今日何をすべきかをブリーフィングしてください。\n\n"
-        "## 出力フォーマット\n"
-        "1. **おはようございます** — 一言の挨拶（簡潔に）\n"
-        "2. **本日の優先アクション** — 今日やるべきことを優先順に3〜5件。具体的なアクション（「〇〇を確認する」「〇〇に連絡する」等）で書く\n"
-        "3. **注意事項** — 期限超過タスクがあれば警告、負荷の偏りがあれば指摘\n"
-        "4. **明日以降の準備** — 明日・今週中に備えて今日着手すべきこと（あれば）\n\n"
-        "## ルール\n"
-        "- 簡潔で実用的に。冗長な説明は不要\n"
-        "- 各アクションには該当タスク名を含める\n"
-        "- 期限超過は最優先で扱う\n"
-        "- quad A（重要&緊急）> doing（進行中）> 本日期限 の順で優先\n"
-        "- Markdown形式で出力\n\n"
-        f"## タスクデータ\n{task_data}"
-    )
-
 
 def render_secretary():
-    """秘書エージェントのブリーフィングを表示"""
+    """秘書エージェント — ブリーフィング＋ツール付きチャット"""
     st.markdown("### 📋 秘書エージェント")
-
-    col1, col2 = st.columns([1, 5])
-    with col1:
-        run_briefing = st.button("今日のブリーフィング", key="secretary_run", use_container_width=True)
-    with col2:
-        st.markdown("<span style='font-size:12px;color:#9b9a97;'>タスク状況を分析して、今日やるべきことを教えます</span>", unsafe_allow_html=True)
-
-    if "secretary_result" not in st.session_state:
-        st.session_state.secretary_result = None
-
-    if run_briefing:
-        with st.spinner("タスクを分析中..."):
-            try:
-                client = get_anthropic_client()
-                system_prompt = _build_secretary_prompt()
-                response = client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=2048,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": "今日のブリーフィングをお願いします。"}],
-                )
-                text = "\n".join(b.text for b in response.content if hasattr(b, "text"))
-                st.session_state.secretary_result = text
-            except Exception as e:
-                st.session_state.secretary_result = f"エラーが発生しました: {str(e)}"
-        st.rerun()
-
-    if st.session_state.secretary_result:
-        st.markdown(
-            f'<div class="secretary-card">{""}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(st.session_state.secretary_result)
-        if st.button("閉じる", key="secretary_close"):
-            st.session_state.secretary_result = None
-            st.rerun()
-
-
-# ── AI view ───────────────────────────────────────────────────────────────────
-def render_ai_chat():
-    """メインエリアにAIチャットを表示"""
-    st.markdown("### AI タスクアシスタント")
-    st.markdown("タスクの分析・作成・完了・分解などを自然言語で指示できます。")
+    st.markdown(
+        "<span style='font-size:13px;color:#9b9a97;'>"
+        "タスクの分析・ブリーフィング・作成・完了・分解・更新など、何でも指示できます"
+        "</span>",
+        unsafe_allow_html=True,
+    )
 
     # クイックアクション
-    qa1, qa2, qa3 = st.columns(3)
-    if qa1.button("全タスクを分析", key="qa_analyze", use_container_width=True):
-        st.session_state.ai_pending = "全タスクを分析して、今すぐやるべきトップ3、リスクのあるタスク、担当者の負荷バランス、今週の戦略的アドバイスを教えて。"
-    if qa2.button("期限切れを整理", key="qa_overdue", use_container_width=True):
-        st.session_state.ai_pending = "期限切れのタスクを確認して、対処方法を提案してください。必要に応じて期限の更新もしてください。"
-    if qa3.button("大きいタスクを分解", key="qa_decompose", use_container_width=True):
-        st.session_state.ai_pending = "説明が複雑そうなタスクや大きそうなタスクを見つけて、具体的なサブタスクに分解してください。"
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    if qa1.button("今日のブリーフィング", key="qa_briefing", use_container_width=True):
+        st.session_state.sec_pending = "今日のブリーフィングをお願いします。"
+    if qa2.button("全タスク分析", key="qa_analyze", use_container_width=True):
+        st.session_state.sec_pending = "全タスクを分析して、今すぐやるべきトップ3、リスクのあるタスク、担当者の負荷バランス、今週の戦略的アドバイスを教えて。"
+    if qa3.button("期限切れを整理", key="qa_overdue", use_container_width=True):
+        st.session_state.sec_pending = "期限切れのタスクを確認して、対処方法を提案してください。必要に応じて期限の更新もしてください。"
+    if qa4.button("大きいタスクを分解", key="qa_decompose", use_container_width=True):
+        st.session_state.sec_pending = "説明が複雑そうなタスクや大きそうなタスクを見つけて、具体的なサブタスクに分解してください。"
 
     st.markdown("---")
 
     # チャット初期化
-    if "ai_messages" not in st.session_state:
-        st.session_state.ai_messages = []
-    if "ai_display" not in st.session_state:
-        st.session_state.ai_display = []
+    if "sec_messages" not in st.session_state:
+        st.session_state.sec_messages = []
+    if "sec_display" not in st.session_state:
+        st.session_state.sec_display = []
 
     # チャット履歴表示
-    for msg in st.session_state.ai_display:
+    for msg in st.session_state.sec_display:
         if msg["role"] == "user":
             st.chat_message("user").markdown(msg["content"])
         else:
-            st.chat_message("assistant").markdown(msg["content"])
+            st.chat_message("assistant", avatar="📋").markdown(msg["content"])
 
     # 入力欄
-    user_input = st.chat_input("タスクについて指示してください（例:「来週の会議準備タスクを作って」）")
+    user_input = st.chat_input("秘書に指示してください（例:「今日何すればいい？」「来週の会議準備タスクを作って」）")
 
     # クイックアクションまたはテキスト入力
-    pending = st.session_state.pop("ai_pending", None)
+    pending = st.session_state.pop("sec_pending", None)
     msg_to_send = pending or user_input
 
     if msg_to_send:
-        st.session_state.ai_messages.append({"role": "user", "content": msg_to_send})
-        st.session_state.ai_display.append({"role": "user", "content": msg_to_send})
+        st.session_state.sec_messages.append({"role": "user", "content": msg_to_send})
+        st.session_state.sec_display.append({"role": "user", "content": msg_to_send})
         st.chat_message("user").markdown(msg_to_send)
 
-        with st.chat_message("assistant"):
-            with st.spinner("考え中..."):
+        with st.chat_message("assistant", avatar="📋"):
+            with st.spinner("確認しています..."):
                 try:
-                    reply, updated_messages = ai_chat_response(st.session_state.ai_messages)
-                    st.session_state.ai_messages = updated_messages
-                    st.session_state.ai_display.append({"role": "assistant", "content": reply})
+                    reply, updated_messages = secretary_chat_response(st.session_state.sec_messages)
+                    st.session_state.sec_messages = updated_messages
+                    st.session_state.sec_display.append({"role": "assistant", "content": reply})
                     st.markdown(reply)
                 except Exception as e:
                     error_msg = f"エラーが発生しました: {str(e)}"
                     st.error(error_msg)
-                    st.session_state.ai_messages.append({"role": "assistant", "content": [{"type": "text", "text": error_msg}]})
-                    st.session_state.ai_display.append({"role": "assistant", "content": error_msg})
+                    st.session_state.sec_messages.append({"role": "assistant", "content": [{"type": "text", "text": error_msg}]})
+                    st.session_state.sec_display.append({"role": "assistant", "content": error_msg})
 
     # チャットリセット
-    if st.session_state.ai_display:
-        if st.button("会話をリセット", key="ai_reset"):
-            st.session_state.ai_messages = []
-            st.session_state.ai_display = []
+    if st.session_state.sec_display:
+        if st.button("会話をリセット", key="sec_reset"):
+            st.session_state.sec_messages = []
+            st.session_state.sec_display = []
             st.rerun()
 
 # ── Supabase ─────────────────────────────────────────────────────────────────
@@ -1486,11 +1436,6 @@ def main():
     # 秘書エージェント
     with st.container(border=True):
         render_secretary()
-    st.markdown("---")
-
-    # AIチャット
-    with st.container(border=True):
-        render_ai_chat()
     st.markdown("---")
 
     tab1, tab2, tab3, tab4 = st.tabs(["カンバン", "マトリクス", "プロジェクト", "テーブル"])
