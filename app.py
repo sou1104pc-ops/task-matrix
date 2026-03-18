@@ -587,6 +587,13 @@ def db_load():
             sb.table("tasks").insert(t).execute()
         return DEFAULT_TASKS, DEFAULT_PROJECTS, DEFAULT_MEMBERS
 
+    # DEFAULT_PROJECTSに新規追加があればDBへ自動同期
+    existing_ids = {p["id"] for p in projects}
+    for dp in DEFAULT_PROJECTS:
+        if dp["id"] not in existing_ids:
+            sb.table("projects").insert(dp).execute()
+            projects.append(dp)
+
     return tasks, projects, members
 
 TASK_COLUMNS = {"id", "name", "description", "quad", "future", "status", "due", "assignees", "tag", "project", "repeat"}
