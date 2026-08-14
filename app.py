@@ -267,6 +267,8 @@ DEFAULT_TASKS = [
     {"id": 7, "name": "加古川スタジオ 設備点検", "description": "照明・音響・清掃用具チェック", "quad": "C", "future": 1, "status": "todo", "due": "2026-03-18", "assignees": ["d", "e"], "tag": "設備", "project": "p4"},
     {"id": 8, "name": "Brain セールスレター 改稿", "description": "ターゲット訴求を強化", "quad": "B", "future": 5, "status": "todo", "due": "2026-03-22", "assignees": ["a"], "tag": "コンテンツ", "project": "p1"},
     {"id": 9, "name": "競合スタジオ NONO 調査メモ整理", "description": "加古川・高砂・神戸3拠点の料金体系比較", "quad": "B", "future": 4, "status": "done", "due": "2026-02-20", "assignees": ["c", "a"], "tag": "調査", "project": "p4"},
+    # ── システム配布タスク（id 9000以降を予約）: DBへ自動同期される ──
+    {"id": 9001, "name": "全店 売上シートに「カシカシ」経由サイトを反映", "description": "各店の予約台帳プルダウン・確認シートの集計・PL表に「カシカシ」を追加（インスタベース/スペースマーケット/自社決済に続く4つ目の経由サイト）。台帳で「カシカシ」を選択すれば集計へ自動反映される。", "quad": "B", "future": 3, "status": "todo", "due": "2026-08-21", "assignees": ["b"], "tag": "売上管理", "project": "p4"},
 ]
 
 # ── Anthropic ────────────────────────────────────────────────────────────────
@@ -696,6 +698,13 @@ def db_load():
             sb.table("projects").insert(dp).execute()
             projects.append(dp)
 
+    # DEFAULT_TASKSに新規追加（id 9000以降のシステム配布タスク）があればDBへ自動同期
+    existing_task_ids = {t["id"] for t in tasks}
+    for dt in DEFAULT_TASKS:
+        if dt["id"] >= 9000 and dt["id"] not in existing_task_ids:
+            db_upsert_task(dt)
+            tasks.append(dt)
+
     return tasks, projects, members
 
 TASK_COLUMNS = {"id", "name", "description", "quad", "future", "status", "due", "assignees", "tag", "project", "repeat"}
@@ -748,7 +757,9 @@ def init_state():
         st.session_state.projects = projects
         st.session_state.members  = members
     if "next_id" not in st.session_state:
-        ids = [t["id"] for t in st.session_state.tasks]
+        # id 9000以降はシステム配布タスク用に予約（ユーザー採番を圧迫しない）
+        ids = [t["id"] for t in st.session_state.tasks
+               if isinstance(t["id"], int) and t["id"] < 9000]
         st.session_state.next_id = max(ids) + 1 if ids else 1
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
