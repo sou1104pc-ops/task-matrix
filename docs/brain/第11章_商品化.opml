@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>第11章 商品化</title>
+  </head>
+  <body>
+    <outline text="第11章 商品化">
+      <outline text="0. この章の位置づけ">
+        <outline text="この章がいちばん大事">
+          <outline text="教材を作ること自体は、これまでの章に沿ってやれば誰でもできる"/>
+          <outline text="制作フェーズは再現性が高く、差がつきにくい"/>
+          <outline text="本当に差がつくのは「いかに売れるか」"/>
+        </outline>
+        <outline text="売れるかどうかを左右する2大要素">
+          <outline text="最初の値段（価格設定）"/>
+          <outline text="サムネイル"/>
+        </outline>
+        <outline text="この章で扱わないこと">
+          <outline text="裏アルゴリズム（重要ではあるが、この章では解説しない）"/>
+        </outline>
+      </outline>
+      <outline text="1. 最初の値段">
+        <outline text="最初にいくらで出すかで、その後の売れ行きが変わる"/>
+        <outline text="【要追記】推奨の価格帯と決め方"/>
+        <outline text="【要追記】値上げ・価格変更のタイミング"/>
+        <outline text="単品の売上だけで完結させない前提で決める（→「3. 1本売って終わりにしない」へ）"/>
+      </outline>
+      <outline text="2. サムネイル">
+        <outline text="サムネイルで売上は大きく変わる"/>
+        <outline text="売れるサムネの6要素">
+          <outline text="要素①【後日追記】"/>
+          <outline text="要素②【後日追記】"/>
+          <outline text="要素③【後日追記】"/>
+          <outline text="要素④【後日追記】"/>
+          <outline text="要素⑤【後日追記】"/>
+          <outline text="要素⑥【後日追記】"/>
+        </outline>
+        <outline text="作り方：ChatGPTに作ってもらうのが今いちばんやりやすい">
+          <outline text="STEP1：Brainなどで売られている「これいいな」と思うサムネを集める"/>
+          <outline text="STEP2：それをベースにChatGPTに作ってもらう"/>
+          <outline text="STEP3：色などを変えて、自分の教材用に寄せる"/>
+          <outline text="ポイント：ゼロから作らない。お手本ベースが最短"/>
+          <outline text="ポイント：仕上げに「6要素」を満たしているかチェックする"/>
+        </outline>
+      </outline>
+      <outline text="3. 1本売って終わりにしない（収益の導線）">
+        <outline text="「100円で1個売れて100円」では美味しくない"/>
+        <outline text="打ち手A：オプトインアフィリエイトを使う">
+          <outline text="案件はこちらで紹介する（講座内で共有）"/>
+        </outline>
+        <outline text="打ち手B：特典を使って公式LINEに引っ張る">
+          <outline text="教材の中に特典を置く"/>
+          <outline text="特典の受け取り先を公式LINEにする"/>
+          <outline text="公式LINE・メルマガの中で商品を売る"/>
+        </outline>
+        <outline text="ここまで作れたらめちゃくちゃ強い">
+          <outline text="教材の売上＋その後ろの売上が乗る"/>
+          <outline text="1回の販売がリスト（資産）として残る"/>
+        </outline>
+      </outline>
+      <outline text="4. 特典の作り込み">
+        <outline text="特典は結構豪華にしておく"/>
+        <outline text="効果1：教材そのものが売れやすくなる"/>
+        <outline text="効果2：公式LINEに登録してもらいやすくなる"/>
+        <outline text="効果3：オプトインアフィリエイトにも登録してもらいやすくなる"/>
+        <outline text="「なんとなく付ける」ではなく、意識して設計するポイント"/>
+      </outline>
+      <outline text="5. この章のアクション">
+        <outline text="価格を決めた"/>
+        <outline text="お手本にするサムネを集めた"/>
+        <outline text="ChatGPTでサムネを作り、6要素でチェックした"/>
+        <outline text="特典を用意した（豪華さを確認）"/>
+        <outline text="公式LINEを設置し、特典の受け取り導線をつないだ"/>
+        <outline text="オプトインアフィリエイトの案件に登録した"/>
+        <outline text="公式LINE・メルマガでの販売の流れを用意した"/>
+      </outline>
+    </outline>
+  </body>
+</opml>
