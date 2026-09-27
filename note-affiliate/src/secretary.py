@@ -265,7 +265,7 @@ async def _tool_generate_draft(args, ctx):
             return {"error": f"知らない案件idです: {bad} / 使えるid: {sorted(valid)}"}
         theme = {"theme": theme_name, "persona": "", "programs": programs}
     try:
-        await ctx.bot.make_draft(theme)
+        await ctx.make_draft(theme)
     except Exception as e:  # noqa: BLE001 - 失敗も会話で伝える
         return {"error": f"生成に失敗しました: {e}"}
     return {"作成した": True,
