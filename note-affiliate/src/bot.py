@@ -258,15 +258,19 @@ class AffiliateBot(discord.Client):
 
     # ---- draft lifecycle ----
     async def make_draft(self, theme=None):
+        """(draft_id, None) か、失敗したら (None, 理由) を返す。"""
         ch = self.draft_channel()
         theme = theme or storage.next_theme()
         if not theme:
-            return await ch.send("テーマが登録されていません。/テーマ追加 で追加してください。")
+            reason = "テーマが登録されていません。/テーマ追加 で追加してください。"
+            await ch.send(reason)
+            return None, reason
         note = await ch.send(f"🧠 記事を生成中…　テーマ: {theme['theme']}")
         try:
             data = await generator.generate(theme, storage.published_titles())
         except generator.GenerationError as e:
-            return await note.edit(content=f"⚠️ 生成に失敗しました: {e}")
+            await note.edit(content=f"⚠️ 生成に失敗しました: {e}")
+            return None, str(e)
         issues = checker.check(data)
         draft_id = storage.create_draft(theme.get("id"), data, issues)
         if theme.get("id"):
@@ -277,6 +281,7 @@ class AffiliateBot(discord.Client):
         )
         storage.update_draft(draft_id, message_id=msg.id)
         await note.delete()
+        return draft_id, None
 
     async def revise_draft(self, draft_id, instruction, channel):
         draft = storage.get_draft(draft_id)

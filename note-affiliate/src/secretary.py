@@ -265,10 +265,12 @@ async def _tool_generate_draft(args, ctx):
             return {"error": f"知らない案件idです: {bad} / 使えるid: {sorted(valid)}"}
         theme = {"theme": theme_name, "persona": "", "programs": programs}
     try:
-        await ctx.make_draft(theme)
+        draft_id, reason = await ctx.make_draft(theme)
     except Exception as e:  # noqa: BLE001 - 失敗も会話で伝える
         return {"error": f"生成に失敗しました: {e}"}
-    return {"作成した": True,
+    if reason:
+        return {"error": f"生成に失敗しました: {reason}"}
+    return {"作成した": True, "draft_id": draft_id,
             "備考": "#下書き チャンネルに承認ボタン付きで出しました。noteにはまだ投稿していません"}
 
 
