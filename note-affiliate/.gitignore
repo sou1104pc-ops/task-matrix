@@ -5,3 +5,4 @@ data/drafts/
 data/screenshots/
 __pycache__/
 .venv/
+data/bot.log

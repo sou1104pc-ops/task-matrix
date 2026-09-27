@@ -17,8 +17,8 @@ from discord.ext import tasks
 
 from . import checker, fix_existing, generator, storage
 from .config import (
-    AUTO_PUBLISH, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID, JST, NOTE_USER,
-    REPORT_CHANNEL_ID, load_programs,
+    AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID,
+    JST, NOTE_USER, REPORT_CHANNEL_ID, load_programs,
 )
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
@@ -26,6 +26,8 @@ log = logging.getLogger("bot")
 browser_lock = asyncio.Lock()
 _h, _m = map(int, DAILY_TIME.split(":"))
 DAILY_AT = time(hour=_h, minute=_m, tzinfo=JST)
+_rh, _rm = map(int, DAILY_REPORT_TIME.split(":"))
+DAILY_REPORT_AT = time(hour=_rh, minute=_rm, tzinfo=JST)
 WEEKLY_AT = time(hour=9, minute=0, tzinfo=JST)
 
 
@@ -157,6 +159,7 @@ class AffiliateBot(discord.Client):
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
         self.daily.start()
+        self.daily_report_task.start()
         self.weekly.start()
 
     async def on_ready(self):
@@ -181,6 +184,18 @@ class AffiliateBot(discord.Client):
 
     @daily.before_loop
     async def _wait_daily(self):
+        await self.wait_until_ready()
+
+    @tasks.loop(time=DAILY_REPORT_AT)
+    async def daily_report_task(self):
+        try:
+            await self.report_channel().send(embed=await daily_report())
+        except Exception as e:  # noqa: BLE001 - 1日の失敗で毎日の実行を止めない
+            log.exception("daily report failed")
+            await self.report_channel().send(f"⚠️ デイリーレポートでエラーが起きました: {e}")
+
+    @daily_report_task.before_loop
+    async def _wait_daily_report(self):
         await self.wait_until_ready()
 
     @tasks.loop(time=WEEKLY_AT)
@@ -284,6 +299,71 @@ def fetch_note_stats():
     return data.get("totalCount"), data["contents"]
 
 
+def _sign(n):
+    return f"+{n:,}" if n >= 0 else f"{n:,}"
+
+
+async def daily_report():
+    """その日の閲覧数(PV)・スキ・投稿・成約をまとめる。
+
+    PVは公開APIに無いため、ログイン済みブラウザで note の統計APIから取る。
+    「今日のPV」は note 側の day 集計、「前回からの増分」は累計値のスナップショット差分で出す。
+    """
+    today = datetime.now(JST).date()
+    today_str = today.isoformat()
+    since = datetime.combine(today, time(0, 0, tzinfo=JST)).isoformat()
+    posts = storage.posts_since(since)
+    convs = storage.conversions_since(since)
+
+    e = discord.Embed(title=f"📊 デイリーレポート（{today:%-m/%-d}）", color=0x3AA0F2)
+    try:
+        async with browser_lock:
+            async with NoteClient(headless=True) as nc:
+                day = await nc.stats("day")
+                allt = await nc.stats("all")
+    except Exception as ex:  # noqa: BLE001 - 統計が取れなくてもレポートは出す
+        log.exception("daily stats failed")
+        e.add_field(name="note統計", value=f"取得できませんでした: {ex}", inline=False)
+    else:
+        prev = storage.previous_note_stats(today_str)
+        storage.save_note_stats(
+            today_str, allt.get("total_pv") or 0, allt.get("total_like") or 0, allt.get("total_comment") or 0
+        )
+        e.add_field(name="今日のPV", value=f"{day.get('total_pv') or 0:,}", inline=True)
+        if prev:
+            e.add_field(
+                name=f"前回（{prev['date']}）からの増分",
+                value=f"{_sign((allt.get('total_pv') or 0) - prev['total_pv'])} PV / "
+                      f"{_sign((allt.get('total_like') or 0) - prev['total_like'])} スキ",
+                inline=True,
+            )
+        else:
+            e.add_field(name="前回からの増分", value="初回のため明日から出ます", inline=True)
+        e.add_field(
+            name="累計",
+            value=f"{allt.get('total_pv') or 0:,} PV / {allt.get('total_like') or 0:,} スキ",
+            inline=True,
+        )
+        top = sorted(day.get("notes") or [], key=lambda n: n.get("read_count", 0), reverse=True)
+        top = [n for n in top if n.get("read_count")][:5]
+        if top:
+            e.add_field(
+                name="今日よく読まれた記事",
+                value="\n".join(f"{n['read_count']}PV {n['name'][:38]}" for n in top),
+                inline=False,
+            )
+        if allt.get("last_calculate_at"):
+            e.set_footer(text=f"note側の集計時刻: {allt['last_calculate_at']}")
+
+    e.add_field(name="今日の投稿", value=f"{len(posts)}本", inline=True)
+    e.add_field(
+        name="成約（手入力分）",
+        value=f"{len(convs)}件 / {sum(c['amount'] or 0 for c in convs):,}円",
+        inline=True,
+    )
+    return e
+
+
 async def weekly_report():
     since = (datetime.now(JST) - timedelta(days=7)).isoformat()
     posts = storage.posts_since(since)
@@ -341,6 +421,11 @@ def register_commands(bot):
     async def conversion_cmd(interaction, 案件: app_commands.Choice[str], 金額: int, 記事url: str = None, メモ: str = None):
         storage.add_conversion(案件.value, 金額, 記事url, メモ)
         await interaction.response.send_message(f"💰 記録しました: {案件.name} {金額:,}円")
+
+    @bot.tree.command(name="日次レポート", description="今日のPV・投稿・成約を表示する")
+    async def daily_report_cmd(interaction):
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await daily_report())
 
     @bot.tree.command(name="レポート", description="直近7日のレポートを表示する")
     async def report_cmd(interaction):

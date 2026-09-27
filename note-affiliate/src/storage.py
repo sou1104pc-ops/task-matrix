@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS note_stats (
+    date TEXT PRIMARY KEY,         -- JSTの日付 YYYY-MM-DD
+    total_pv INTEGER,              -- 累計PV（その日の記録時点）
+    total_like INTEGER,
+    total_comment INTEGER,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -171,3 +178,23 @@ def add_conversion(program, amount, note_url=None, memo=None):
 def conversions_since(iso):
     with connect() as c:
         return [dict(r) for r in c.execute("SELECT * FROM conversions WHERE created_at>=?", (iso,))]
+
+
+# ---- note統計のスナップショット ----
+def save_note_stats(date, total_pv, total_like, total_comment):
+    """その日の累計値を記録する（同じ日に複数回呼ばれたら上書き）。"""
+    with connect() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO note_stats (date, total_pv, total_like, total_comment, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (date, total_pv, total_like, total_comment, now()),
+        )
+
+
+def previous_note_stats(date):
+    """指定日より前で一番新しいスナップショットを返す（差分の計算に使う）。"""
+    with connect() as c:
+        row = c.execute(
+            "SELECT * FROM note_stats WHERE date < ? ORDER BY date DESC LIMIT 1", (date,)
+        ).fetchone()
+        return dict(row) if row else None

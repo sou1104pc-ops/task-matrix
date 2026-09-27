@@ -187,6 +187,44 @@ class NoteClient:
         print("ブラウザでnoteにログインしてください。ログインできたらこの画面で Enter を押します。")
         await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
 
+    async def stats(self, period="all", max_pages=20):
+        """ダッシュボードの閲覧数(PV)を取る。
+
+        公開API（/api/v2/creators/.../contents）にはPVが無いため、ログインが要る統計APIを使う。
+        period は all / day / week / month / year。day は「今日」。
+        戻り値: {total_pv, total_like, total_comment, start_date_str, end_date_str, last_calculate_at, notes}
+        notes の各要素は {id, name, read_count（PV）, like_count, comment_count}。
+        """
+        try:
+            await self.page.goto("https://note.com/")
+            totals, notes, page_no = None, [], 1
+            while page_no <= max_pages:
+                r = await self.page.request.get(
+                    f"https://note.com/api/v1/stats/pv?filter={period}&page={page_no}&sort=pv"
+                )
+                if r.status in (401, 403):
+                    raise NotLoggedIn(
+                        "noteにログインしていません。`python -m src.note_client login` を実行してください"
+                    )
+                if r.status != 200:
+                    raise NoteError(f"note統計の取得に失敗しました（HTTP {r.status} / filter={period}）")
+                d = (await r.json())["data"]
+                if totals is None:
+                    totals = {
+                        k: d.get(k) for k in
+                        ("total_pv", "total_like", "total_comment",
+                         "start_date_str", "end_date_str", "last_calculate_at")
+                    }
+                notes += d.get("note_stats") or []
+                if d.get("last_page"):
+                    break
+                page_no += 1
+            return {**(totals or {}), "notes": notes}
+        except (NotLoggedIn, NoteError):
+            raise
+        except Exception as e:
+            raise NoteError(f"note統計の取得に失敗しました: {e}") from e
+
     async def create(self, title, html, hashtags, publish=True):
         """新規記事を作る。publish=False なら下書き保存で止める。記事URLを返す。"""
         try:
