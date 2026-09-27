@@ -15,10 +15,10 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import checker, fix_existing, generator, storage
+from . import checker, fix_existing, generator, secretary, storage
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID,
-    JST, NOTE_USER, REPORT_CHANNEL_ID, load_programs,
+    JST, NOTE_USER, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, load_programs,
 )
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
@@ -147,7 +147,9 @@ class FixView(discord.ui.View):
 # ---------------------------------------------------------------- bot
 class AffiliateBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.message_content = bool(SECRETARY_CHANNEL_ID)  # #秘書 を使うときだけ必要
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
@@ -164,6 +166,53 @@ class AffiliateBot(discord.Client):
 
     async def on_ready(self):
         log.info("ログインしました: %s", self.user)
+
+    # ---- 秘書との会話 ----
+    async def on_message(self, message):
+        if message.author.bot or not SECRETARY_CHANNEL_ID:
+            return
+        if message.channel.id != SECRETARY_CHANNEL_ID or not message.content.strip():
+            return
+        async with message.channel.typing():
+            thinking = await message.channel.send("🤔 考えています…")
+
+            async def progress(tool_name):
+                await thinking.edit(content=f"🔧 {tool_name} を実行中…")
+
+            try:
+                reply, used = await secretary.chat(message.channel.id, message.content, self, progress)
+            except secretary.SecretaryError as e:
+                return await thinking.edit(content=f"⚠️ {e}")
+            except Exception as e:  # noqa: BLE001 - 会話の失敗でBotを落とさない
+                log.exception("secretary failed")
+                return await thinking.edit(content=f"⚠️ エラーが起きました: {e}")
+        await thinking.delete()
+        for i in range(0, len(reply), 1900):
+            await message.channel.send(reply[i:i + 1900])
+        if used:
+            log.info("secretary tools: %s", ", ".join(used))
+
+    @property
+    def browser_lock(self):
+        return browser_lock
+
+    async def mark_draft_done(self, draft, status):
+        """秘書が投稿したとき、#下書き の承認ボタンを消して報告する。"""
+        label = "投稿済み" if status == "published" else "note下書き保存済み"
+        ch = self.draft_channel()
+        if ch and draft.get("message_id"):
+            try:
+                msg = await ch.fetch_message(draft["message_id"])
+                await msg.edit(
+                    embed=draft_embed(draft["id"], draft["data"], draft["issues"], label), view=None
+                )
+            except discord.HTTPException:
+                pass
+        url = storage.get_draft(draft["id"])["note_url"]
+        if status == "published" and self.report_channel():
+            await self.report_channel().send(
+                f"📣 秘書が「{draft['data']['title']}」を投稿しました\n{url}"
+            )
 
     def draft_channel(self):
         return self.get_channel(DRAFT_CHANNEL_ID)
@@ -421,6 +470,11 @@ def register_commands(bot):
     async def conversion_cmd(interaction, 案件: app_commands.Choice[str], 金額: int, 記事url: str = None, メモ: str = None):
         storage.add_conversion(案件.value, 金額, 記事url, メモ)
         await interaction.response.send_message(f"💰 記録しました: {案件.name} {金額:,}円")
+
+    @bot.tree.command(name="秘書リセット", description="秘書との会話の記憶を消す")
+    async def reset_chat_cmd(interaction):
+        n = storage.clear_chat(str(interaction.channel_id))
+        await interaction.response.send_message(f"🧹 会話の記憶を消しました（{n}件）", ephemeral=True)
 
     @bot.tree.command(name="日次レポート", description="今日のPV・投稿・成約を表示する")
     async def daily_report_cmd(interaction):

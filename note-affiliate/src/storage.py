@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS chat_log (
+    id INTEGER PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    role TEXT NOT NULL,            -- user / assistant
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS note_stats (
     date TEXT PRIMARY KEY,         -- JSTの日付 YYYY-MM-DD
     total_pv INTEGER,              -- 累計PV（その日の記録時点）
@@ -198,3 +205,28 @@ def previous_note_stats(date):
             "SELECT * FROM note_stats WHERE date < ? ORDER BY date DESC LIMIT 1", (date,)
         ).fetchone()
         return dict(row) if row else None
+
+
+# ---- 秘書との会話履歴 ----
+def add_chat(channel_id, role, content):
+    with connect() as c:
+        c.execute(
+            "INSERT INTO chat_log (channel_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (channel_id, role, content, now()),
+        )
+
+
+def recent_chat(channel_id, limit=16):
+    """古い順に (role, content) を返す。"""
+    with connect() as c:
+        rows = c.execute(
+            "SELECT role, content FROM chat_log WHERE channel_id=? ORDER BY id DESC LIMIT ?",
+            (channel_id, limit),
+        ).fetchall()
+    return [(r["role"], r["content"]) for r in reversed(rows)]
+
+
+def clear_chat(channel_id):
+    with connect() as c:
+        cur = c.execute("DELETE FROM chat_log WHERE channel_id=?", (channel_id,))
+        return cur.rowcount

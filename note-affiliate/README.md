@@ -26,6 +26,36 @@ Mac mini のブラウザ（Playwright）で note に投稿 → #レポート に
 | `/レポート` | 直近7日の投稿数・成約・スキ（毎週月曜9時にも自動送信） |
 | `/停止` `/再開` | 毎朝の自動生成を止める／再開する |
 | `/既存記事修正` | 既存9記事の修正案を1記事ずつ表示 → [この内容でnoteを更新] |
+| `/秘書リセット` | 秘書との会話の記憶を消す |
+
+## 秘書と会話する（#秘書 チャンネル）
+
+`#秘書` チャンネルに普通に話しかけると答えます。記事生成と同じ Claude Code（`claude -p`）が頭脳なので、追加のAPIキーは要りません。
+
+```
+あなた: 今日のPVどう？
+秘書  : 今日（9/27）のPVは0、スキも0です。ただしnote側の15:57時点の集計なので、
+        それ以降の閲覧は入っていません。直近7日の推移も見ますか？
+
+あなた: 「SAP FIコンサルの年収実態」ってテーマ足しといて。案件はSAP転職のやつで
+秘書  : 「SAP FIコンサルの年収実態」を追加しました（案件: sap_tenshoku）。
+```
+
+秘書ができるのは `src/secretary.py` の `TOOLS` に書いた操作だけです（シェル権限は渡していません）。
+
+| 種類 | ツール |
+|---|---|
+| 調べる | `get_stats` `list_themes` `list_recent_posts` `list_conversions` `get_status` `list_drafts` `list_existing_fixes` |
+| 手元のデータを変える | `add_theme` `record_conversion` `set_paused` |
+| **noteに反映される** | `generate_draft`（下書きを作って #下書き に出す）`publish_draft`（noteに投稿）`apply_existing_fix`（既存記事を更新） |
+
+`publish_draft` は**公開前チェックでエラーが出ている下書きを投稿できません**（[承認して投稿] ボタンと同じルール）。秘書が投稿すると `#レポート` に報告が出ます。
+
+### 使うための設定
+1. Discord Developer Portal → 対象のBot → **Bot** → **Privileged Gateway Intents** → **MESSAGE CONTENT INTENT** を ON（メッセージ本文を読むのに必要）
+2. `#秘書` チャンネルを作り、IDを `.env` の `SECRETARY_CHANNEL_ID` に書く
+
+`SECRETARY_CHANNEL_ID` が空なら会話機能は無効になり、Bot はメッセージを一切読みません。
 
 ## セットアップ（Mac mini で1回だけ）
 
@@ -130,6 +160,7 @@ Claude Code に「スクリーンショットを見て note_selectors.json を�
 src/bot.py            Discord Bot 本体
 src/generator.py      Claude Code（claude -p）で記事生成・修正
 src/checker.py        公開前チェック
+src/secretary.py      #秘書 チャンネルの会話エージェント（ツール定義もここ）
 src/note_client.py    note のブラウザ操作（投稿・既存記事の部分修正）
 src/fix_existing.py   既存記事の修正の読み込み・反映
 src/storage.py        SQLite（テーマ・下書き・成約）
