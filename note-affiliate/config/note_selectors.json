@@ -1,0 +1,14 @@
+{
+  "_説明": "noteのエディタ画面の要素。noteの画面が変わって投稿に失敗したら、ここを直す。各項目は候補を上から順に試す。",
+  "new_note_url": "https://note.com/notes/new",
+  "edit_url": "https://editor.note.com/notes/{key}/edit/",
+  "title": ["textarea[placeholder='記事タイトル']", "textarea[placeholder*='タイトル']", "[data-testid='title'] textarea"],
+  "body": [".ProseMirror[contenteditable='true']", "div[contenteditable='true'][role='textbox']", "div[contenteditable='true']"],
+  "save_draft": ["button:has-text('下書き保存')"],
+  "go_publish": ["button:has-text('公開に進む')", "button:has-text('公開設定')"],
+  "hashtag_input": ["input[placeholder*='ハッシュタグ']", "input[placeholder*='タグ']"],
+  "hashtag_remove": ["button[aria-label*='削除']", "[class*='hashtag'] button"],
+  "publish": ["button:has-text('投稿する')", "button:has-text('公開する')"],
+  "update": ["button:has-text('更新する')", "button:has-text('投稿する')"],
+  "login_url_part": "/login"
+}

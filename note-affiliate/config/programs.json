@@ -1,0 +1,50 @@
+{
+  "_説明": "A8で提携中の案件。url は既存記事で使っていたA8リンク。記事に入れてよいのはここにある案件だけ（チェッカーが検査）。",
+  "programs": [
+    {
+      "id": "sap_tenshoku",
+      "name": "SAPテンショク",
+      "url": "https://px.a8.net/svt/ejp?a8mat=4AZJGD+74LWTM+5N98+BWVTE",
+      "reward": 15000,
+      "target": "SAPコンサルタント・SAPエンジニア（経験者中心、未経験からSAPを目指す人も）",
+      "selling_points": "SAP専門の転職エージェント。キャリアカウンセラーがSAP従事者で、モジュールや案件の話が通じる。無料で相談できる。",
+      "cta": "SAPテンショクに無料で相談してみる"
+    },
+    {
+      "id": "techgo",
+      "name": "TechGo（テックゴー）",
+      "url": "https://px.a8.net/svt/ejp?a8mat=4AZLSL+75SS16+5B0Y+HV7V6",
+      "reward": null,
+      "target": "経験者ITエンジニアのハイクラス転職・年収アップ",
+      "selling_points": "ITエンジニア向けハイクラス転職支援。模擬面接や年収交渉のサポート。",
+      "cta": "TechGoでハイクラス転職を無料相談する"
+    },
+    {
+      "id": "agent_navi",
+      "name": "転職AGENT Navi",
+      "url": "https://px.a8.net/svt/ejp?a8mat=4AZLSL+6JRQNE+5BJK+5Z6WY",
+      "reward": null,
+      "target": "どのエージェントを使えばいいか分からない人全般",
+      "selling_points": "希望に合う転職エージェントを紹介してくれるサービス。",
+      "cta": "転職AGENT Naviで自分に合うエージェントを探す"
+    },
+    {
+      "id": "neo",
+      "name": "第二新卒エージェントneo",
+      "url": "https://px.a8.net/svt/ejp?a8mat=4AZLSL+711B6Y+3Y6M+66H9D",
+      "reward": null,
+      "target": "第二新卒・既卒・フリーターなど20代の正社員就職",
+      "selling_points": "20代向けの就職・転職支援。書類や面接の手厚いサポート。",
+      "cta": "第二新卒エージェントneoに無料で相談する"
+    },
+    {
+      "id": "sportsforce",
+      "name": "スポーツフォース",
+      "url": "https://px.a8.net/svt/ejp?a8mat=4AZLSL+83QHII+4BB4+5ZMCH",
+      "reward": null,
+      "target": "体育会系・スポーツ経験者の就職・転職",
+      "selling_points": "体育会・スポーツ経験者向けの転職支援。",
+      "cta": "スポーツフォースに無料で転職相談する"
+    }
+  ]
+}
