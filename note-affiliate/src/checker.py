@@ -33,7 +33,7 @@ def text_of(html):
 def image_text(data):
     """見出し画像と図に描く文字（画像になっても本文と同じルールで見る）。"""
     thumb = data.get("thumbnail") or {}
-    parts = [thumb.get("label") or "", thumb.get("catch") or ""]
+    parts = [str(v) for v in thumb.values()]
     for f in data.get("figures") or []:
         parts.append(f.get("title") or "")
         parts += f.get("items") or []

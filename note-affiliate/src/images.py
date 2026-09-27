@@ -20,7 +20,8 @@ FIG_TYPES = {"checklist", "steps", "compare"}
 BASE_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
-       color: #1f2d3d; background: #fff; }
+       color: #1f2d3d; background: #fff;
+       word-break: auto-phrase; line-break: strict; }  /* 日本語を文節で折り返す（単語の途中で切らない） */
 """
 
 THUMB_CSS = BASE_CSS + """
@@ -33,6 +34,7 @@ THUMB_CSS = BASE_CSS + """
          padding: 10px 28px; border-radius: 999px; margin-bottom: 40px; }
 .catch { font-weight: 800; font-size: 76px; line-height: 1.35; letter-spacing: .01em; }
 .catch em { font-style: normal; color: #139a86; }
+.sub { font-weight: 700; font-size: 40px; line-height: 1.5; color: #4a5a6a; margin-top: 28px; }
 """
 
 FIG_CSS = BASE_CSS + """
@@ -53,7 +55,9 @@ td.head { background: #e1f5f1; font-weight: 800; }
 
 
 def _page(css, inner):
-    return f"<!doctype html><meta charset='utf-8'><style>{css}</style><body><div id='card'>{inner}</div></body>"
+    # lang="ja" が無いと auto-phrase（文節での折り返し）が効かない
+    return (f"<!doctype html><html lang='ja'><meta charset='utf-8'><style>{css}</style>"
+            f"<body><div id='card'>{inner}</div></body></html>")
 
 
 def _catch_html(text):
@@ -65,12 +69,24 @@ def _catch_html(text):
     return "<br>".join(p for p in parts if p)
 
 
-def thumbnail_html(data):
+def thumbnail_text(data):
+    """(label, catch, sub) を返す。Claude が別名のキーで返したときや、無いときはタイトルから作る。"""
     t = data.get("thumbnail") or {}
-    catch = t.get("catch") or data["title"]
     label = t.get("label") or ""
+    catch = t.get("catch") or t.get("title") or t.get("text") or ""
+    sub = t.get("sub") or t.get("subtitle") or ""
+    if not catch:
+        m = re.match(r"【(.+?)】\s*(.+)", data["title"])
+        catch = m.group(2) if m else data["title"]
+        label = label or (m.group(1) if m else "")
+    return label, catch, sub
+
+
+def thumbnail_html(data):
+    label, catch, sub = thumbnail_text(data)
     label_html = f"<div class='label'>{escape(label)}</div>" if label else ""
-    return _page(THUMB_CSS, f"{label_html}<div class='catch'>{_catch_html(catch)}</div>")
+    sub_html = f"<div class='sub'>{escape(sub)}</div>" if sub else ""
+    return _page(THUMB_CSS, f"{label_html}<div class='catch'>{_catch_html(catch)}</div>{sub_html}")
 
 
 def figure_html(fig):
@@ -99,6 +115,28 @@ def figure_html(fig):
     return _page(FIG_CSS, f"{title}{body}")
 
 
+# 見出し画像の文字が枠からはみ出す間、大きい文字から順に小さくする
+FIT_JS = """
+() => {
+  const card = document.getElementById('card');
+  const catchEl = card.querySelector('.catch'), sub = card.querySelector('.sub');
+  let size = 76, subSize = 40;
+  const fits = () => {
+    let h = 0;
+    for (const c of card.children) {
+      const cs = getComputedStyle(c);
+      h += c.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+    }
+    return h <= card.clientHeight - 100;
+  };
+  while (!fits() && size > 44) {
+    size -= 4; catchEl.style.fontSize = size + 'px';
+    if (sub && subSize > 30) { subSize -= 2; sub.style.fontSize = subSize + 'px'; }
+  }
+}
+"""
+
+
 def figure_ids(html):
     return MARKER.findall(html)
 
@@ -119,6 +157,7 @@ async def render(draft_id, data):
         browser = await pw.chromium.launch()
         page = await browser.new_page(viewport={"width": THUMB_SIZE[0], "height": THUMB_SIZE[1]})
         await page.set_content(thumbnail_html(data))
+        await page.evaluate(FIT_JS)
         await page.locator("#card").screenshot(path=str(result["thumbnail"]))
         for fid in figure_ids(data["body_html"]):
             if fid not in figs or fid in result["figures"]:
@@ -130,17 +169,6 @@ async def render(draft_id, data):
             result["figures"][fid] = path
         await browser.close()
     return result
-
-
-async def ensure(draft_id, data):
-    """描画済みの画像があればそれを使い、足りなければ描き直す。"""
-    out = draft_dir(draft_id)
-    thumb = out / "thumbnail.png"
-    figs = {fid: out / f"{fid}.png" for fid in figure_ids(data["body_html"])}
-    known = {f.get("id") for f in data.get("figures") or []}
-    if thumb.exists() and all(p.exists() for fid, p in figs.items() if fid in known):
-        return {"thumbnail": thumb, "figures": {k: v for k, v in figs.items() if v.exists()}}
-    return await render(draft_id, data)
 
 
 def split_body(html):

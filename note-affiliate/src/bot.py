@@ -312,7 +312,7 @@ class AffiliateBot(discord.Client):
         data = draft["data"]
         async with browser_lock:
             try:
-                imgs = await images.ensure(draft["id"], data)
+                imgs = await images.render(draft["id"], data)
                 async with NoteClient() as nc:
                     url = await nc.create(data["title"], data["body_html"], data["hashtags"], publish=AUTO_PUBLISH,
                                           thumbnail=imgs["thumbnail"], figures=imgs["figures"])

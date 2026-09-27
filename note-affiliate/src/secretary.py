@@ -292,7 +292,7 @@ async def _tool_publish_draft(args, ctx):
     async with ctx.browser_lock:
         try:
             async with NoteClient() as nc:
-                imgs = await images.ensure(draft_id, data)
+                imgs = await images.render(draft_id, data)
                 url = await nc.create(data["title"], data["body_html"], data["hashtags"],
                                       publish=AUTO_PUBLISH, thumbnail=imgs["thumbnail"],
                                       figures=imgs["figures"])
