@@ -254,6 +254,9 @@ class NoteClient:
                 await self.page.keyboard.press("Enter")
                 await self.page.evaluate(PASTE_JS, [handle, append_html])
                 await asyncio.sleep(1)
+                first_line = re.sub(r"<[^>]+>", "\n", append_html).strip().split("\n")[0]
+                if first_line not in await body.inner_text():
+                    not_found.append(f"末尾への追記（手動で追加してください）: {first_line}")
             if title:
                 await self._set_title(title)
             await asyncio.sleep(2)
