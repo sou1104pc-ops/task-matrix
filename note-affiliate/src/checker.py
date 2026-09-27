@@ -23,8 +23,42 @@ STAT_PATTERN = r"(約?\d[\d,，.]*\s*(件|社|人|名)|\d[\d.]*\s*[%％]|平均\
 ALLOWED_TAGS = {"h2", "h3", "p", "ul", "ol", "li", "strong", "a", "blockquote", "br"}
 
 
+FIG_MARKER = r"\[\[FIG:([\w-]+)\]\]"
+
+
 def text_of(html):
-    return unescape(re.sub(r"<[^>]+>", "", html))
+    return unescape(re.sub(FIG_MARKER, "", re.sub(r"<[^>]+>", "", html)))
+
+
+def image_text(data):
+    """見出し画像と図に描く文字（画像になっても本文と同じルールで見る）。"""
+    thumb = data.get("thumbnail") or {}
+    parts = [thumb.get("label") or "", thumb.get("catch") or ""]
+    for f in data.get("figures") or []:
+        parts.append(f.get("title") or "")
+        parts += f.get("items") or []
+        parts += f.get("columns") or []
+        for row in f.get("rows") or []:
+            parts += row
+    return "\n".join(str(p) for p in parts)
+
+
+def check_figures(data):
+    issues = []
+    html = data["body_html"]
+    used = re.findall(FIG_MARKER, html)
+    figs = {f.get("id"): f for f in data.get("figures") or []}
+    for fid in used:
+        if fid not in figs:
+            issues.append(("warn", f"図 {fid} の中身がありません（その位置には何も入りません）"))
+    for fid in figs:
+        if fid not in used:
+            issues.append(("warn", f"図 {fid} は本文のどこにも置かれていません"))
+    if re.search(r"</(ul|ol)>\s*<p>\s*" + FIG_MARKER, html):
+        issues.append(("warn", "図がリストの直後にあります（noteで位置がずれることがあります）"))
+    if not used:
+        issues.append(("warn", "本文に図解がありません"))
+    return issues
 
 
 def check(data):
@@ -32,6 +66,7 @@ def check(data):
     issues = []
     title, html = data["title"], data["body_html"]
     body = text_of(html)
+    pictures = image_text(data)
     programs = load_programs()
 
     first_p = re.search(r"<p[^>]*>(.*?)</p>", html, re.S)
@@ -39,14 +74,14 @@ def check(data):
         issues.append(("error", "冒頭にPR表記がありません"))
 
     for pat in EXAGGERATION:
-        m = re.search(pat, title + "\n" + body)
+        m = re.search(pat, title + "\n" + body + "\n" + pictures)
         if m:
             issues.append(("error", f"断定・誇大表現「{m.group(0)}」があります"))
     for pat in FAKE_EXPERIENCE:
-        for m in re.finditer(pat, body):
+        for m in re.finditer(pat, body + "\n" + pictures):
             issues.append(("error", f"架空の実体験に見える表現: 「{m.group(0)}」"))
     for pat in FAKE_REVIEW:
-        if re.search(pat, body + title):
+        if re.search(pat, body + title + pictures):
             issues.append(("error", f"口コミ・利用者の声の提示があります（{pat}）"))
 
     allowed_urls = {programs[p]["url"] for p in data.get("allowed_programs", []) if p in programs}
@@ -61,7 +96,9 @@ def check(data):
     if tags:
         issues.append(("warn", f"想定外のHTMLタグ: {', '.join(sorted(tags))}"))
 
-    stats = sorted(set(m.group(0) for m in re.finditer(STAT_PATTERN, body)))
+    issues += check_figures(data)
+
+    stats = sorted(set(m.group(0) for m in re.finditer(STAT_PATTERN, body + "\n" + pictures)))
     if stats:
         issues.append(("warn", "出典の確認が必要な数値: " + "、".join(stats[:10])))
 

@@ -12,7 +12,30 @@ from difflib import SequenceMatcher
 
 from playwright.async_api import async_playwright
 
+from . import images
 from .config import BROWSER_PROFILE, JST, NOTE_USER, SCREENSHOTS_DIR, load_selectors
+
+# ヘッドレスの既定UA（HeadlessChrome）だと、noteが新規記事の作成APIを弾く（CORSエラーで編集画面が開かない）
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+)
+
+# 見出し画像ボタンにはラベルが無いので、タイトル欄のすぐ上にあるボタンを位置で探す
+HEADER_IMAGE_BUTTON_JS = """
+() => {
+  const title = document.querySelector('textarea');
+  if (!title) return false;
+  const t = title.getBoundingClientRect();
+  const b = [...document.querySelectorAll('button')].find(b => {
+    const r = b.getBoundingClientRect();
+    return r.width && r.bottom <= t.top && r.top > 60 && Math.abs(r.left - t.left) < 40;
+  });
+  if (!b) return false;
+  b.click();
+  return true;
+}
+"""
 
 PASTE_JS = """
 ([el, html]) => {
@@ -110,7 +133,8 @@ class NoteClient:
     async def __aenter__(self):
         self._pw = await async_playwright().start()
         self.ctx = await self._pw.chromium.launch_persistent_context(
-            str(BROWSER_PROFILE), headless=self.headless, locale="ja-JP", viewport={"width": 1280, "height": 900}
+            str(BROWSER_PROFILE), headless=self.headless, locale="ja-JP", viewport={"width": 1280, "height": 900},
+            user_agent=USER_AGENT,
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
         return self
@@ -163,6 +187,63 @@ class NoteClient:
         actual = len(await loc.inner_text())
         if actual < expected * 0.8:
             raise NoteError(f"本文の貼り付けが不完全です（{actual}/{expected}字）")
+
+    async def _set_header_image(self, path):
+        if not await self.page.evaluate(HEADER_IMAGE_BUTTON_JS):
+            raise NoteError("見出し画像のボタンが見つかりません")
+        async with self.page.expect_file_chooser() as fc:
+            await (await self._find("header_image_upload")).click()
+        await (await fc.value).set_files(str(path))
+        save = self.page.locator(self.sel["crop_modal"][0]).get_by_role("button", name="保存", exact=True)
+        await save.wait_for(timeout=15000)
+        await save.click()
+        await self.page.locator(self.sel["crop_modal"][0]).wait_for(state="detached", timeout=30000)
+
+    async def _insert_body_image(self, body, path):
+        """カーソルのある空行に画像を入れ、画像の下の新しい段落にカーソルを移す。"""
+        before = await body.locator("figure img").count()
+        await (await self._find("body_menu")).click()
+        async with self.page.expect_file_chooser() as fc:
+            await self.page.get_by_role("button", name="画像", exact=True).click()
+        await (await fc.value).set_files(str(path))
+        for _ in range(60):
+            await asyncio.sleep(0.5)
+            if await body.locator("figure img").count() > before:
+                break
+        else:
+            raise NoteError(f"本文への画像のアップロードが終わりません: {path.name}")
+        await asyncio.sleep(1)
+        await self.page.keyboard.press("Enter")  # キャプション欄 → 画像の下に新しい段落
+        await asyncio.sleep(0.3)
+
+    async def _set_body_with_images(self, html, figures):
+        """図のマーカーの位置で本文を区切り、文章と画像を順番に入れる。"""
+        loc = await self._find("body")
+        handle = await loc.element_handle()
+        await loc.click()
+        parts = images.split_body(html)
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                if part.strip():
+                    await self.page.evaluate(PASTE_JS, [handle, part])
+                    await asyncio.sleep(1)
+                continue
+            path = figures.get(part)
+            if not path:
+                continue
+            await self.page.keyboard.press("Enter")
+            await asyncio.sleep(0.3)
+            await self._insert_body_image(loc, path)
+        await asyncio.sleep(2)
+        text_only = images.MARKER.sub("", html)
+        expected = len(re.sub(r"<[^>]+>", "", text_only))
+        actual = len(await loc.inner_text())
+        if actual < expected * 0.8:
+            raise NoteError(f"本文の貼り付けが不完全です（{actual}/{expected}字）")
+        want = sum(1 for j, p in enumerate(parts) if j % 2 and figures.get(p))
+        got = await loc.locator("figure img").count()
+        if got < want:
+            raise NoteError(f"本文の画像が足りません（{got}/{want}枚）")
 
     async def _set_hashtags(self, hashtags, clear):
         try:
@@ -225,14 +306,20 @@ class NoteClient:
         except Exception as e:
             raise NoteError(f"note統計の取得に失敗しました: {e}") from e
 
-    async def create(self, title, html, hashtags, publish=True):
-        """新規記事を作る。publish=False なら下書き保存で止める。記事URLを返す。"""
+    async def create(self, title, html, hashtags, publish=True, thumbnail=None, figures=None):
+        """新規記事を作る。publish=False なら下書き保存で止める。記事URLを返す。
+
+        thumbnail は見出し画像のPNG、figures は {図id: PNG}（本文の [[FIG:id]] の位置に入る）。
+        """
         try:
             await self.page.goto(self.sel["new_note_url"])
             await self.page.wait_for_load_state("networkidle")
             self._check_login()
+            await (await self._find("title", timeout=30000)).wait_for()
+            if thumbnail:
+                await self._set_header_image(thumbnail)
             await self._set_title(title)
-            await self._set_body(html, replace=False)
+            await self._set_body_with_images(html, figures or {})
             key = self._key_from_url()
             if not publish:
                 await (await self._find("save_draft")).click()

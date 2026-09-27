@@ -58,6 +58,8 @@ def _parse_article(text):
         raise GenerationError(f"生成結果に必要な項目がありません: {missing}")
     data.setdefault("program_ids", [])
     data.setdefault("summary", "")
+    data.setdefault("thumbnail", {})
+    data.setdefault("figures", [])
     return data
 
 
@@ -77,7 +79,7 @@ async def generate(theme, past_titles):
 
 async def revise(draft, instruction):
     allowed = draft.get("allowed_programs", [])
-    body = {k: draft[k] for k in ("title", "hashtags", "program_ids", "summary", "body_html")}
+    body = {k: draft.get(k) for k in ("title", "hashtags", "program_ids", "summary", "thumbnail", "figures", "body_html")}
     text = prompt("revise").format(
         instruction=instruction,
         programs=_programs_text(allowed),

@@ -11,7 +11,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
-from . import checker, fix_existing, storage
+from . import checker, fix_existing, images, storage
 from .config import (
     AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST, load_programs,
 )
@@ -292,8 +292,10 @@ async def _tool_publish_draft(args, ctx):
     async with ctx.browser_lock:
         try:
             async with NoteClient() as nc:
+                imgs = await images.ensure(draft_id, data)
                 url = await nc.create(data["title"], data["body_html"], data["hashtags"],
-                                      publish=AUTO_PUBLISH)
+                                      publish=AUTO_PUBLISH, thumbnail=imgs["thumbnail"],
+                                      figures=imgs["figures"])
         except NotLoggedIn as e:
             return {"error": f"noteにログインできていません: {e}"}
         except NoteError as e:

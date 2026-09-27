@@ -5,6 +5,7 @@
 - /生成 /修正 /テーマ追加 などのスラッシュコマンドで指示を出せる
 """
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -15,7 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import checker, fix_existing, generator, secretary, storage
+from . import checker, fix_existing, generator, images, secretary, storage
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID,
     JST, NOTE_USER, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, load_programs,
@@ -31,12 +32,16 @@ DAILY_REPORT_AT = time(hour=_rh, minute=_rm, tzinfo=JST)
 WEEKLY_AT = time(hour=9, minute=0, tzinfo=JST)
 
 
-def preview_html(data):
+def preview_html(data, imgs):
     tags = " ".join(data.get("hashtags", []))
+    thumb = base64.b64encode(imgs["thumbnail"].read_bytes()).decode()
     return (
-        "<!doctype html><meta charset='utf-8'><title>下書きプレビュー</title>"
+        "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>下書きプレビュー</title>"
         "<body style='max-width:720px;margin:auto;font-family:sans-serif;line-height:1.8;padding:16px'>"
-        f"<h1>{data['title']}</h1><p style='color:#888'>{tags}</p>{data['body_html']}</body>"
+        f"<img src='data:image/png;base64,{thumb}' style='width:100%;border-radius:8px'>"
+        f"<h1>{data['title']}</h1><p style='color:#888'>{tags}</p>"
+        f"{images.embed_images(data['body_html'], imgs)}</body>"
     )
 
 
@@ -57,11 +62,15 @@ def draft_embed(draft_id, data, issues, status="承認待ち"):
     return e
 
 
-def draft_files(draft_id, data):
+async def draft_files(draft_id, data):
+    """見出し画像・図・プレビューHTMLを Discord の添付にする（画像はスマホでもそのまま見られる）。"""
+    imgs = await images.render(draft_id, data)
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
-    html = preview_html(data)
+    html = preview_html(data, imgs)
     (DRAFTS_DIR / f"draft-{draft_id}.html").write_text(html, encoding="utf-8")
-    return [discord.File(io.BytesIO(html.encode()), filename=f"draft-{draft_id}.html")]
+    files = [discord.File(imgs["thumbnail"], filename=f"draft-{draft_id}-thumbnail.png")]
+    files += [discord.File(p, filename=f"draft-{draft_id}-{fid}.png") for fid, p in imgs["figures"].items()]
+    return files[:9] + [discord.File(io.BytesIO(html.encode()), filename=f"draft-{draft_id}.html")]
 
 
 # ---------------------------------------------------------------- views
@@ -276,8 +285,8 @@ class AffiliateBot(discord.Client):
         if theme.get("id"):
             storage.mark_theme_used(theme["id"])
         msg = await ch.send(
-            content="📝 今日の下書きです。プレビューは添付のHTMLを開いてください。",
-            embed=draft_embed(draft_id, data, issues), files=draft_files(draft_id, data), view=DraftView(self),
+            content="📝 今日の下書きです。見出し画像と図は添付の画像、本文は添付のHTMLで確認できます。",
+            embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
         await note.delete()
@@ -295,7 +304,7 @@ class AffiliateBot(discord.Client):
         await old.edit(view=None)
         msg = await channel.send(
             content=f"✏️ 修正版です（指示: {instruction[:100]}）",
-            embed=draft_embed(draft_id, data, issues), files=draft_files(draft_id, data), view=DraftView(self),
+            embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
 
@@ -303,8 +312,10 @@ class AffiliateBot(discord.Client):
         data = draft["data"]
         async with browser_lock:
             try:
+                imgs = await images.ensure(draft["id"], data)
                 async with NoteClient() as nc:
-                    url = await nc.create(data["title"], data["body_html"], data["hashtags"], publish=AUTO_PUBLISH)
+                    url = await nc.create(data["title"], data["body_html"], data["hashtags"], publish=AUTO_PUBLISH,
+                                          thumbnail=imgs["thumbnail"], figures=imgs["figures"])
             except NotLoggedIn as e:
                 return await channel.send(f"🔒 {e}")
             except NoteError as e:

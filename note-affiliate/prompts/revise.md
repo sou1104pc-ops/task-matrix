@@ -11,4 +11,6 @@
 {draft_json}
 
 # 出力形式
-元と同じキー（title, hashtags, program_ids, summary, body_html）を持つJSONだけを出力してください（前後に説明文やコードフェンスを付けない）。
+元と同じキー（title, hashtags, program_ids, summary, thumbnail, figures, body_html）を持つJSONだけを出力してください（前後に説明文やコードフェンスを付けない）。
+thumbnail は見出し画像の文字、figures は本文中の図解で、body_html の <p>[[FIG:id]]</p> の位置に入ります。
+本文を直したら、図や見出し画像の文字も本文と食い違わないように合わせてください。図の type（checklist / steps / compare）と項目の書き方は元の形式のまま使います。
