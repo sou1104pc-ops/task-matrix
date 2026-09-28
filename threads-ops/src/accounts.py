@@ -12,7 +12,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 from . import storage, threads_api
-from .config import JST, load_accounts
+from .config import JST, THREADS_APP_SECRET, load_accounts
 from .threads_api import ThreadsError
 
 REFRESH_BEFORE_DAYS = 20   # 期限まで残りこの日数を切ったら延長する
@@ -26,6 +26,9 @@ def register_token(account_id, token):
     """短期でも長期でも受け取り、長期トークンにして保存する。保存した行を返す。"""
     if account_id not in load_accounts():
         raise ThreadsError(f"config/accounts.json に id「{account_id}」がありません")
+    if not THREADS_APP_SECRET:
+        # Secretが無いと長期トークンに換えられず、1時間で切れるトークンを保存してしまう
+        raise ThreadsError(".env に THREADS_APP_SECRET を設定してから登録してください")
     try:
         long = threads_api.to_long_lived(token)
     except ThreadsError:
