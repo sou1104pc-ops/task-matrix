@@ -156,6 +156,27 @@ class RescheduleModal(discord.ui.Modal, title="投稿時刻を変更"):
         await interaction.response.send_message(msg, ephemeral=True)
 
 
+class TokenModal(discord.ui.Modal):
+    """/接続 でトークンを登録する。モーダルの入力はチャンネルに残らない。"""
+    token = discord.ui.TextInput(label="アクセストークン", style=discord.TextStyle.paragraph, max_length=1000,
+                                 placeholder="Metaの「ユーザートークン生成ツール」でコピーしたもの")
+
+    def __init__(self, account_id):
+        super().__init__(title=f"{account_name(account_id)} を接続"[:45])
+        self.account_id = account_id
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            t = await asyncio.to_thread(accounts.register_token, self.account_id, str(self.token).strip())
+        except ThreadsError as e:
+            return await interaction.followup.send(f"⚠️ 登録できませんでした: {e}", ephemeral=True)
+        await interaction.followup.send(
+            f"✅ {account_name(self.account_id)} を @{t['username']} として接続しました"
+            f"（トークン期限 {(t['expires_at'] or '不明')[:10]}、以後は自動で延長します）", ephemeral=True,
+        )
+
+
 class ManualPostModal(discord.ui.Modal):
     """/予約 で手書きの投稿を登録する。"""
 
@@ -515,6 +536,12 @@ def register_commands(bot):
             appr = len(storage.drafts_by_status(["approved"], aid))
             lines.append(f"**{name}**（{aid}）{state}\n　承認待ち {pend}件 / 予約済み {appr}件")
         await interaction.response.send_message("\n".join(lines)[:1900] or "config/accounts.json にアカウントがありません")
+
+    @bot.tree.command(name="接続", description="Threadsアカウントのトークンを登録する（再接続にも使う）")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.choices(アカウント=choices)
+    async def connect_cmd(interaction, アカウント: app_commands.Choice[str]):
+        await interaction.response.send_modal(TokenModal(アカウント.value))
 
     @bot.tree.command(name="生成", description="下書きを今すぐ作る")
     @app_commands.describe(アカウント="省略すると全アカウント", 日付="省略すると明日", ネタ="書いてほしいテーマ（省略可）")
