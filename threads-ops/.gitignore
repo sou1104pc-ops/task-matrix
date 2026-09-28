@@ -1,0 +1,5 @@
+.env
+config/accounts.json
+data/
+__pycache__/
+.venv/
