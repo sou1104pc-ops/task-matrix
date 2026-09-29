@@ -285,10 +285,11 @@ class FailedView(_DraftButtons):
 
 # ---------------------------------------------------------------- bot
 class ThreadsBot(discord.Client):
-    def __init__(self):
+    def __init__(self, read_messages=bool(SECRETARY_CHANNEL_ID)):
         intents = discord.Intents.default()
-        intents.message_content = bool(SECRETARY_CHANNEL_ID)  # #秘書 を使うときだけ必要
+        intents.message_content = read_messages  # #秘書 を使うときだけ必要
         super().__init__(intents=intents)
+        self.secretary_off_reason = None
         self.tree = app_commands.CommandTree(self)
         self.generating = asyncio.Lock()
 
@@ -310,10 +311,13 @@ class ThreadsBot(discord.Client):
 
     async def on_ready(self):
         log.info("ログインしました: %s", self.user)
+        if self.secretary_off_reason:
+            await self.report(self.secretary_off_reason)
+            self.secretary_off_reason = None
 
     # ---- 秘書との会話 ----
     async def on_message(self, message):
-        if message.author.bot or not SECRETARY_CHANNEL_ID or message.channel.id != SECRETARY_CHANNEL_ID:
+        if message.author.bot or not self.intents.message_content or message.channel.id != SECRETARY_CHANNEL_ID:
             return
         if not message.content.strip():
             return
@@ -627,7 +631,23 @@ def register_commands(bot):
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    ThreadsBot().run(DISCORD_TOKEN, log_handler=None)
+    # 前回 Message Content Intent がオフで起動できなかったら、今回は秘書なしで起動する（予約投稿を止めないため）。
+    # 同じプロセス内で起動し直すとDiscordに接続できないので、いったん終了して launchd の再起動に任せる。
+    # フラグは毎回消すので、Intent をオンにしてから再起動すれば秘書ありに戻る。
+    denied = storage.get_setting("intent_denied") == "1"
+    storage.set_setting("intent_denied", "0")
+    bot = ThreadsBot(read_messages=bool(SECRETARY_CHANNEL_ID) and not denied)
+    if denied and SECRETARY_CHANNEL_ID:
+        bot.secretary_off_reason = (
+            "⚠️ Discord Developer Portal → Bot の「Message Content Intent」がオフのため、#秘書 を止めて起動しました"
+            "（予約投稿は動いています）。オンにして保存したら、Botを再起動してください"
+        )
+    try:
+        bot.run(DISCORD_TOKEN, log_handler=None)
+    except discord.PrivilegedIntentsRequired:
+        log.error("Message Content Intent がオフです。次の起動は秘書なしで行います")
+        storage.set_setting("intent_denied", "1")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
