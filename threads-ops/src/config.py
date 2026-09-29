@@ -26,6 +26,7 @@ DISCORD_TOKEN = env("DISCORD_TOKEN")
 GUILD_ID = env_int("DISCORD_GUILD_ID")
 DRAFT_CHANNEL_ID = env_int("DRAFT_CHANNEL_ID")
 REPORT_CHANNEL_ID = env_int("REPORT_CHANNEL_ID")
+SECRETARY_CHANNEL_ID = env_int("SECRETARY_CHANNEL_ID")  # 空なら秘書は使わない
 DRAFT_TIME = env("DRAFT_TIME", "20:00")          # 翌日分の下書きを作る時刻
 POST_JITTER_MIN = int(env("POST_JITTER_MIN", "6"))  # 投稿時刻を 0〜N 分ランダムにずらす
 CLAUDE_CMD = env("CLAUDE_CMD", "claude")
@@ -52,6 +53,14 @@ def load_accounts():
         a.setdefault("slots", [])
         a.setdefault("topics", [])
     return {a["id"]: a for a in accounts}
+
+
+def save_accounts(accounts):
+    """id → dict を config/accounts.json に書き戻す（秘書が運用方針を変えるときに使う）。"""
+    tmp = ACCOUNTS_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"accounts": list(accounts.values())}, f, ensure_ascii=False, indent=2)
+    tmp.replace(ACCOUNTS_PATH)
 
 
 def prompt(name):

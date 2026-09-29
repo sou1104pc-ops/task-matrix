@@ -14,10 +14,10 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import accounts, checker, generator, storage, threads_api
+from . import accounts, checker, generator, secretary, storage, threads_api
 from .config import (
     DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFT_TIME, GUILD_ID, JST, MAX_CHAIN, POST_JITTER_MIN,
-    REPORT_CHANNEL_ID, load_accounts,
+    REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, load_accounts,
 )
 from .threads_api import ThreadsError
 
@@ -286,7 +286,9 @@ class FailedView(_DraftButtons):
 # ---------------------------------------------------------------- bot
 class ThreadsBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.message_content = bool(SECRETARY_CHANNEL_ID)  # #秘書 を使うときだけ必要
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.generating = asyncio.Lock()
 
@@ -308,6 +310,31 @@ class ThreadsBot(discord.Client):
 
     async def on_ready(self):
         log.info("ログインしました: %s", self.user)
+
+    # ---- 秘書との会話 ----
+    async def on_message(self, message):
+        if message.author.bot or not SECRETARY_CHANNEL_ID or message.channel.id != SECRETARY_CHANNEL_ID:
+            return
+        if not message.content.strip():
+            return
+        thinking = await message.channel.send("🤔 考えています…")
+
+        async def progress(tool_name):
+            await thinking.edit(content=f"🔧 {tool_name} を実行中…")
+
+        try:
+            async with message.channel.typing():
+                reply, used = await secretary.chat(message.channel.id, message.content, self, progress)
+        except secretary.SecretaryError as e:
+            return await thinking.edit(content=f"⚠️ {e}")
+        except Exception as e:  # noqa: BLE001 - 会話の失敗でBotを落とさない
+            log.exception("secretary failed")
+            return await thinking.edit(content=f"⚠️ エラーが起きました: {e}")
+        await thinking.delete()
+        for i in range(0, len(reply), 1900):
+            await message.channel.send(reply[i:i + 1900])
+        if used:
+            log.info("secretary tools: %s", ", ".join(used))
 
     def channel_for(self, account_id):
         a = load_accounts().get(account_id) or {}
@@ -581,6 +608,11 @@ def register_commands(bot):
             for d in rows
         ]
         await interaction.response.send_message("\n".join(lines)[:1900])
+
+    @bot.tree.command(name="秘書リセット", description="秘書との会話の記憶を消す")
+    async def reset_chat_cmd(interaction):
+        n = storage.clear_chat(interaction.channel_id)
+        await interaction.response.send_message(f"🧹 会話の記憶を消しました（{n}件）", ephemeral=True)
 
     @bot.tree.command(name="停止", description="毎日の下書き自動生成を止める（予約済みの投稿は止まりません）")
     async def pause_cmd(interaction):

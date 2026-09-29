@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS drafts (
 );
 CREATE INDEX IF NOT EXISTS drafts_status ON drafts (status, scheduled_at);
 CREATE INDEX IF NOT EXISTS drafts_message ON drafts (message_id);
+CREATE TABLE IF NOT EXISTS chat_log (
+    id INTEGER PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    role TEXT NOT NULL,            -- user / assistant
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -197,3 +204,37 @@ def recent_texts(account_id=None, limit=30, exclude_id=None):
     with connect() as c:
         rows = c.execute(q, params).fetchall()
     return [(r["account_id"], json.loads(r["posts"])[0]) for r in rows if r["id"] != exclude_id]
+
+
+def posted_since(since_iso, account_id=None):
+    q = "SELECT * FROM drafts WHERE status='posted' AND posted_at>=?"
+    params = [since_iso]
+    if account_id:
+        q += " AND account_id=?"
+        params.append(account_id)
+    with connect() as c:
+        return [_row(r) for r in c.execute(q + " ORDER BY posted_at", params)]
+
+
+# ---- 秘書との会話履歴 ----
+def add_chat(channel_id, role, content):
+    with connect() as c:
+        c.execute(
+            "INSERT INTO chat_log (channel_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (str(channel_id), role, content, now()),
+        )
+
+
+def recent_chat(channel_id, limit=16):
+    """古い順に (role, content) を返す。"""
+    with connect() as c:
+        rows = c.execute(
+            "SELECT role, content FROM chat_log WHERE channel_id=? ORDER BY id DESC LIMIT ?",
+            (str(channel_id), limit),
+        ).fetchall()
+    return [(r["role"], r["content"]) for r in reversed(rows)]
+
+
+def clear_chat(channel_id):
+    with connect() as c:
+        return c.execute("DELETE FROM chat_log WHERE channel_id=?", (str(channel_id),)).rowcount
