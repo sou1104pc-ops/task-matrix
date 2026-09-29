@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from difflib import SequenceMatcher
 
-from playwright.async_api import async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeout, async_playwright
 
 from . import images
 from .config import BROWSER_PROFILE, JST, NOTE_USER, SCREENSHOTS_DIR, load_selectors
@@ -194,10 +194,23 @@ class NoteClient:
         async with self.page.expect_file_chooser() as fc:
             await (await self._find("header_image_upload")).click()
         await (await fc.value).set_files(str(path))
-        save = self.page.locator(self.sel["crop_modal"][0]).get_by_role("button", name="保存", exact=True)
+        modal = self.page.locator(self.sel["crop_modal"][0])
+        save = modal.get_by_role("button", name="保存", exact=True)
         await save.wait_for(timeout=15000)
-        await save.click()
-        await self.page.locator(self.sel["crop_modal"][0]).wait_for(state="detached", timeout=30000)
+        # 切り抜き画面に画像が読み込まれる前に押すと無視されるので、読み込みを待ち、閉じなければ押し直す
+        try:
+            await modal.locator("img").first.wait_for(timeout=15000)
+        except PlaywrightTimeout:
+            pass
+        await asyncio.sleep(2)
+        for _ in range(4):
+            await save.click()
+            try:
+                await modal.wait_for(state="detached", timeout=15000)
+                return
+            except PlaywrightTimeout:
+                continue
+        raise NoteError("見出し画像の［保存］を押しても切り抜き画面が閉じません")
 
     async def _insert_body_image(self, body, path):
         """カーソルのある空行に画像を入れ、画像の下の新しい段落にカーソルを移す。"""
