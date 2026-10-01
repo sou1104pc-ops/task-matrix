@@ -104,6 +104,8 @@ Brain は値上げしても再審査になりません。
 
 ## セットアップ（Mac mini で1回だけ）
 
+はじめから丁寧な手順は [SETUP.md](SETUP.md) にあります。以下は要点です。
+
 ### 1. Discord Bot を作る（note用とは別に）
 1. https://discord.com/developers/applications →「New Application」（名前は例: Brain秘書）
 2. 「Bot」→「Reset Token」でトークンをコピー（`.env` の `DISCORD_TOKEN`）
