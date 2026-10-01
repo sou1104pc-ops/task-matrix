@@ -17,5 +17,5 @@
 元と同じキー（title, summary, thumbnail, figures, body_html）を持つJSONだけを出力してください（前後に説明文やコードフェンスを付けない）。
 - body_html には有料ラインの位置に <p>[[PAYWALL]]</p> を1回だけ置きます（前が無料部分、後ろが有料部分）。指示が無ければ位置は大きく変えない
 - thumbnail はサムネ（ChatGPTが描く）の文字と雰囲気で、{{"label": "短いジャンル名（10字以内）", "catch": "サムネ用のタイトル（2〜3行、改行は単語の切れ目に\\n、1行12字以内、【】「」は使わない）", "sub": "補足（任意、20字以内）", "visual": "背景・イラストの雰囲気"}} の形にします
-- figures は本文中の図解で、body_html の <p>[[FIG:id]]</p> の位置に入ります（type は checklist / steps / compare）
+- figures は本文中の図解で、body_html の <p>[[FIG:id]]</p> の位置に入ります（5〜8個。type は checklist / steps / compare / grid。grid は {{"cards": [{{"head": "10字以内", "text": "30字以内"}} ×4]}}）
 - 本文を直したら、図やメイン画像の文字、無料部分の目次も本文と食い違わないように合わせてください

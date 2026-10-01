@@ -23,6 +23,7 @@ ALLOWED_TAGS = {"h2", "h3", "p", "ul", "ol", "li", "strong", "blockquote", "br"}
 FIG_MARKER = r"\[\[FIG:([\w-]+)\]\]"
 PAYWALL = r"<p>\s*\[\[PAYWALL\]\]\s*</p>"
 MIN_FREE, MIN_PAID = 1000, 5000
+MIN_FIGURES = 5
 PRICE_RANGE = (100, 100000)
 
 
@@ -46,6 +47,9 @@ def image_text(data):
         parts += f.get("columns") or []
         for row in f.get("rows") or []:
             parts += row
+        for card in f.get("cards") or []:
+            if isinstance(card, dict):
+                parts += [card.get("head") or "", card.get("text") or ""]
     return "\n".join(str(p) for p in parts)
 
 
@@ -60,8 +64,8 @@ def check_figures(data):
     for fid in figs:
         if fid not in used:
             issues.append(("warn", f"図 {fid} は本文のどこにも置かれていません"))
-    if not used:
-        issues.append(("warn", "本文に図解がありません"))
+    if len(used) < MIN_FIGURES:
+        issues.append(("warn", f"図解が{len(used)}枚です（{MIN_FIGURES}枚以上を目安にしています）"))
     return issues
 
 

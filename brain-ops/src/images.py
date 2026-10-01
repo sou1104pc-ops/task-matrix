@@ -15,7 +15,7 @@ from .config import DRAFTS_DIR
 THUMB_SIZE = (1280, 670)  # Brain のメイン画像の推奨サイズ
 FIG_WIDTH = 1080          # スマホで縮小されても読める幅
 MARKER = re.compile(r"<p>\s*\[\[FIG:([\w-]+)\]\]\s*</p>")
-FIG_TYPES = {"checklist", "steps", "compare"}
+FIG_TYPES = {"checklist", "steps", "compare", "grid"}
 
 BASE_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -51,6 +51,10 @@ th:empty { background: none; }
 th { background: #2b2b2b; color: #fff; font-weight: 700; padding: 22px 16px; border-radius: 14px; }
 td { background: #fff6ef; padding: 22px 20px; border-radius: 14px; font-weight: 600; vertical-align: middle; }
 td.head { background: #ffe4d1; font-weight: 800; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.card { background: #fff6ef; border-radius: 20px; padding: 30px 30px 34px; border-top: 10px solid #f96204; }
+.card .head { font-size: 40px; font-weight: 800; line-height: 1.35; margin-bottom: 14px; }
+.card .text { font-size: 32px; font-weight: 600; line-height: 1.55; color: #4a5a6a; }
 """
 
 
@@ -92,6 +96,13 @@ def thumbnail_html(data):
 def figure_html(fig):
     title = f"<h1>{escape(fig.get('title', ''))}</h1>" if fig.get("title") else ""
     kind = fig.get("type")
+    if kind == "grid":
+        cards = "".join(
+            f"<div class='card'><div class='head'>{escape(str(c.get('head', '')))}</div>"
+            f"<div class='text'>{escape(str(c.get('text', '')))}</div></div>"
+            for c in (fig.get("cards") or [])[:6] if isinstance(c, dict)
+        )
+        return _page(FIG_CSS, f"{title}<div class='grid'>{cards}</div>")
     if kind == "compare":
         cols = fig.get("columns") or []
         head = "".join(f"<th>{escape(c)}</th>" for c in cols)
