@@ -146,27 +146,40 @@ def draft_dir(draft_id):
 
 
 async def render(draft_id, data):
-    """見出し画像と図を描いて保存し、{"thumbnail": Path, "figures": {id: Path}} を返す。"""
+    """図を描いて保存し、{"thumbnail": Path, "figures": {id: Path}} を返す。
+
+    メイン画像は thumbnail.py（ChatGPT）が先に作って置いておく。無いときだけここでHTMLから作る。
+    """
     return await render_to(draft_dir(draft_id), data)
 
 
-async def render_to(out, data):
-    out.mkdir(parents=True, exist_ok=True)
-    for old in out.glob("*.png"):
-        old.unlink()
-    figs = {f["id"]: f for f in data.get("figures") or [] if f.get("id") and f.get("type") in FIG_TYPES}
-    result = {"thumbnail": out / "thumbnail.png", "figures": {}}
+async def render_thumbnail(path, data):
+    """HTMLのテンプレートからメイン画像を作る（ChatGPTが使えないときの代わり）。"""
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()
         page = await browser.new_page(viewport={"width": THUMB_SIZE[0], "height": THUMB_SIZE[1]})
         await page.set_content(thumbnail_html(data))
         await page.evaluate(FIT_JS)
-        await page.locator("#card").screenshot(path=str(result["thumbnail"]))
+        await page.locator("#card").screenshot(path=str(path))
+        await browser.close()
+
+
+async def render_to(out, data):
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.png"):
+        if old.name != "thumbnail.png":
+            old.unlink()
+    figs = {f["id"]: f for f in data.get("figures") or [] if f.get("id") and f.get("type") in FIG_TYPES}
+    result = {"thumbnail": out / "thumbnail.png", "figures": {}}
+    if not result["thumbnail"].exists():
+        await render_thumbnail(result["thumbnail"], data)
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page(viewport={"width": FIG_WIDTH, "height": 800})
         for fid in figure_ids(data["body_html"]):
             if fid not in figs or fid in result["figures"]:
                 continue
             path = out / f"{fid}.png"
-            await page.set_viewport_size({"width": FIG_WIDTH, "height": 800})
             await page.set_content(figure_html(figs[fid]))
             await page.locator("#card").screenshot(path=str(path))
             result["figures"][fid] = path

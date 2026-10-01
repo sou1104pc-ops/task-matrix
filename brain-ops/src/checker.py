@@ -39,7 +39,7 @@ def split_paywall(html):
 def image_text(data):
     """メイン画像と図に描く文字（画像になっても本文と同じルールで見る）。"""
     thumb = data.get("thumbnail") or {}
-    parts = [str(v) for v in thumb.values()]
+    parts = [str(v) for k, v in thumb.items() if k != "visual"]  # visual は絵の指示で、文字としては載らない
     for f in data.get("figures") or []:
         parts.append(f.get("title") or "")
         parts += f.get("items") or []
@@ -109,9 +109,12 @@ def check(data):
         m = re.search(pat, title + "\n" + body + "\n" + pictures)
         if m:
             issues.append(("error", f"成果の保証・誇大表現「{m.group(0)}」があります"))
+    # 材料から書いた記事は、運営者本人の経験が材料に書かれていることがあるので、止めずに確認を促す
+    level = "warn" if data.get("material_id") else "error"
     for pat in FAKE_EXPERIENCE:
         for m in re.finditer(pat, body + "\n" + pictures):
-            issues.append(("error", f"架空の実体験・実績に見える表現: 「{m.group(0)}」"))
+            note = "（材料に書かれた本人の経験か確認してください）" if level == "warn" else ""
+            issues.append((level, f"架空の実体験・実績に見える表現: 「{m.group(0)}」{note}"))
     for pat in FAKE_REVIEW:
         if re.search(pat, body + title + pictures):
             issues.append(("error", f"口コミ・購入者の声の提示があります（{pat}）"))

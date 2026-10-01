@@ -12,7 +12,11 @@ Brain の画面は裏で api.brain-market.com を呼んでいるので、画面�
   POST  /v2/articles/{id}/eyecatch    メイン画像
   POST  /v2/items                     本文の画像 → URL
   PATCH /v2/articles/{id}/draft       タイトルと本文を保存
-  POST  /v2/articles/{id}/publish     価格・カテゴリ・有料ラインを付けて公開申請（Brainの審査後に公開）
+  POST  /v2/articles/{id}/publish     価格・カテゴリ・有料ライン・レビュー特典を付けて公開申請（Brainの審査後に公開）
+
+公開後の値上げ（画面の「販売設定」と同じ）:
+  GET   /v2/current/articles           公開状態（status / inspect_status / published_at）を見る
+  GET/PATCH /v2/articles/{id}/quick_edit  今の販売設定を読み、価格だけ変えて保存
 """
 import asyncio
 import json
@@ -217,11 +221,39 @@ class BrainClient:
         if subcategory and subcategory not in cats[category]:
             raise BrainError(f"「{category}」にサブカテゴリー「{subcategory}」はありません。使えるもの: {cats[category]}")
 
-    async def create(self, data, thumbnail, figures, publish=True, affiliate_rate=0):
+    async def find_article(self, article_id, max_pages=10):
+        """自分の記事一覧から1本探す（公開状態を見るため）。見つからなければ None。"""
+        for page in range(1, max_pages + 1):
+            items = await self.api("GET", "/v2/current/articles", params={"page": page})
+            if isinstance(items, dict):
+                items = items.get("articles") or items.get("items") or []
+            if not items:
+                return None
+            for a in items:
+                if str(a.get("id")) == str(article_id):
+                    return a
+        return None
+
+    async def set_price(self, article_id, price):
+        """公開中の記事の価格を変える。今の販売設定（カテゴリー・紹介料など）はそのまま。"""
+        cur = await self.api("GET", f"/v2/articles/{article_id}/quick_edit")
+        await self.api("PATCH", f"/v2/articles/{article_id}/quick_edit", body={
+            "id": article_id,
+            "category": cur.get("category") or "",
+            "subcategory": cur.get("subcategory") or None,
+            "sales_count": cur.get("sales_count") or 0,
+            "price": int(price),
+            "affiliate_rate": cur.get("affiliate_rate") or 0,
+            "affiliatable_only_purchaser": bool(cur.get("affiliatable_only_purchaser")),
+            "is_sales_unlimited": cur.get("is_sales_unlimited", True),
+        })
+
+    async def create(self, data, thumbnail, figures, publish=True, affiliate_rate=0, review_reward=None):
         """記事を作る。publish=False なら Brain の下書き保存で止める。
 
         data には title / body_html / price / category / subcategory が入っている。
-        figures は {図id: PNG}。戻り値は (記事ID, URL)。
+        figures は {図id: PNG}。review_reward は {title, content, method}（無ければ特典なし）。
+        戻り値は (記事ID, URL)。
         """
         _, pay_index = brain_blocks(data["body_html"], {k: "-" for k in figures})
         if publish and not pay_index:
@@ -253,8 +285,9 @@ class BrainClient:
             "published_at": None,
             "tags": [],
             "body": "".join(body),
-            "review_rewards": [],
-            "review_reward_receiving_method": None,
+            "review_rewards": [{"title": review_reward["title"], "content": review_reward["content"], "position": 1}]
+            if review_reward else [],
+            "review_reward_receiving_method": review_reward["method"] if review_reward else None,
             "recommendation_rewards": [],
             "recommendation_reward_receiving_method": None,
         })

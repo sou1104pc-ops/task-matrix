@@ -1,7 +1,8 @@
 """Discord Bot 本体。`python -m src.bot` で起動する。
 
-- 毎朝 DAILY_TIME に有料記事の下書きを生成して #下書き チャンネルへ送る
+- 毎朝 DAILY_TIME に有料記事の下書きを生成して #下書き チャンネルへ送る（#材料 に届いた材料を優先して使う）
 - [承認して公開申請] で Brain に投稿（公開申請）し、#レポート チャンネルに報告する
+- 1時間ごとに公開状態を見て、公開から PRICE_SCHEDULE の日数が経った記事を値上げする
 - 毎日 DAILY_REPORT_TIME に、その日の売上・投稿を #レポート に送る
 """
 import asyncio
@@ -14,11 +15,11 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import checker, generator, images, sales, secretary, storage
+from . import checker, generator, images, materials, pricing, sales, secretary, storage, thumbnail
 from .brain_client import BrainClient, BrainError, NotLoggedIn
 from .config import (
     AFFILIATE_RATE, AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DEFAULT_CATEGORY, DISCORD_TOKEN, DRAFT_CHANNEL_ID,
-    DRAFTS_DIR, GUILD_ID, JST, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID,
+    DRAFTS_DIR, GUILD_ID, JST, LINE_URL, MATERIAL_CHANNEL_ID, PRICE_SCHEDULE, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID,
 )
 
 log = logging.getLogger("bot")
@@ -55,10 +56,23 @@ def format_issues(issues):
     return "\n".join(lines)[:1000]
 
 
+def price_plan(first_price):
+    later = " → ".join(f"{d}日後 {p:,}円" for d, p in PRICE_SCHEDULE[1:])
+    return f"{first_price:,}円" + (f" → {later}" if later else "")
+
+
 def draft_embed(draft_id, data, issues, status="承認待ち"):
     e = discord.Embed(title=data["title"][:250], description=(data.get("summary") or "")[:1000], color=0xF96204)
     sub = f" ＞ {data['subcategory']}" if data.get("subcategory") else ""
-    e.add_field(name="販売設定", value=f"{data['price']:,}円 ・ {data['category']}{sub}", inline=False)
+    e.add_field(name="販売設定", value=f"{price_plan(data['price'])}\n{data['category']}{sub}", inline=False)
+    by = data.get("thumbnail_by")
+    if by == "chatgpt":
+        e.add_field(name="サムネ", value="ChatGPTで作成（文字の誤りがあれば [サムネ作り直し]）", inline=False)
+    elif by == "html":
+        e.add_field(name="サムネ", value=f"⚠️ ChatGPTで作れず、仮のサムネです: {data.get('thumbnail_error') or ''}"[:1000],
+                    inline=False)
+    if LINE_URL:
+        e.add_field(name="レビュー特典", value=f"公式LINEへ案内（{LINE_URL}）", inline=False)
     e.add_field(name="自動チェック", value=format_issues(issues), inline=False)
     free, paid = checker.split_paywall(data["body_html"])
     e.set_footer(text=f"下書き #{draft_id} ・ 無料 {len(checker.text_of(free)):,}字 / "
@@ -98,7 +112,8 @@ class SalesModal(discord.ui.Modal, title="販売設定"):
         super().__init__()
         self.bot, self.draft_id = bot, draft["id"]
         d = draft["data"]
-        self.price = discord.ui.TextInput(label="価格（円）", default=str(d["price"]), max_length=7)
+        self.price = discord.ui.TextInput(label="公開直後の価格（円）。その後の値上げは自動", default=str(d["price"]),
+                                          max_length=7)
         self.category = discord.ui.TextInput(label="カテゴリー", default=d["category"], max_length=40)
         self.subcategory = discord.ui.TextInput(label="サブカテゴリー（空でも可）", default=d.get("subcategory") or "",
                                                 required=False, max_length=40)
@@ -112,6 +127,26 @@ class SalesModal(discord.ui.Modal, title="販売設定"):
             return await interaction.response.send_message("価格は数字で入れてください", ephemeral=True)
         await self.bot.update_sales(self.draft_id, interaction, price=price,
                                     category=str(self.category).strip(), subcategory=str(self.subcategory).strip())
+
+
+class ThumbnailModal(discord.ui.Modal, title="サムネ作り直し"):
+    def __init__(self, bot, draft):
+        super().__init__()
+        self.bot, self.draft_id = bot, draft["id"]
+        t = draft["data"].get("thumbnail") or {}
+        self.catch = discord.ui.TextInput(label="サムネの文字（改行も反映されます）", style=discord.TextStyle.paragraph,
+                                          default=t.get("catch") or "", max_length=80)
+        self.sub = discord.ui.TextInput(label="補足の一行（空でも可）", default=t.get("sub") or "", required=False,
+                                        max_length=40)
+        self.visual = discord.ui.TextInput(label="絵の雰囲気（空でも可）", style=discord.TextStyle.paragraph,
+                                           default=t.get("visual") or "", required=False, max_length=300)
+        for item in (self.catch, self.sub, self.visual):
+            self.add_item(item)
+
+    async def on_submit(self, interaction):
+        await interaction.response.send_message(f"🎨 下書き #{self.draft_id} のサムネを作り直しています（1〜2分）")
+        await self.bot.remake_thumbnail(self.draft_id, interaction.channel, catch=str(self.catch).strip(),
+                                        sub=str(self.sub).strip(), visual=str(self.visual).strip())
 
 
 class DraftView(discord.ui.View):
@@ -152,6 +187,13 @@ class DraftView(discord.ui.View):
             return await interaction.response.send_message("この下書きは処理済みです", ephemeral=True)
         await interaction.response.send_modal(SalesModal(self.bot, draft))
 
+    @discord.ui.button(label="サムネ作り直し", style=discord.ButtonStyle.secondary, custom_id="draft:thumbnail")
+    async def remake_thumb(self, interaction, button):
+        draft = self._draft(interaction)
+        if not draft:
+            return await interaction.response.send_message("この下書きは処理済みです", ephemeral=True)
+        await interaction.response.send_modal(ThumbnailModal(self.bot, draft))
+
     @discord.ui.button(label="ボツ", style=discord.ButtonStyle.danger, custom_id="draft:reject")
     async def reject(self, interaction, button):
         draft = self._draft(interaction)
@@ -164,17 +206,39 @@ class DraftView(discord.ui.View):
         await interaction.response.send_message(f"🗑️ 下書き #{draft['id']} をボツにしました")
 
 
+class MaterialView(discord.ui.View):
+    """#材料 の投稿に付けるボタン。"""
+
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="この材料で今すぐ記事にする", style=discord.ButtonStyle.success, custom_id="material:generate")
+    async def generate(self, interaction, button):
+        material = storage.get_material(thread_id=interaction.channel.id)
+        if not material or not storage.material_items(material["id"]):
+            return await interaction.response.send_message("まだ材料がありません。この投稿に返信で材料を送ってください",
+                                                           ephemeral=True)
+        await interaction.response.send_message("🧠 この材料で記事を作ります。#下書き に届きます（数分かかります）")
+        try:
+            await self.bot.make_draft(material=material)
+        except Exception as e:  # noqa: BLE001
+            log.exception("material generate failed")
+            await interaction.followup.send(f"⚠️ 生成でエラーが起きました: {e}")
+
+
 # ---------------------------------------------------------------- bot
 class BrainBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = bool(SECRETARY_CHANNEL_ID)  # #秘書 を使うときだけ必要
+        intents.message_content = bool(SECRETARY_CHANNEL_ID or MATERIAL_CHANNEL_ID)  # #秘書 #材料 を使うときだけ必要
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
         storage.init()
         self.add_view(DraftView(self))
+        self.add_view(MaterialView(self))
         register_commands(self)
         guild = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild)
@@ -182,13 +246,48 @@ class BrainBot(discord.Client):
         self.daily.start()
         self.daily_report_task.start()
         self.weekly.start()
+        self.price_task.start()
 
     async def on_ready(self):
         log.info("ログインしました: %s", self.user)
 
+    # ---- #材料 ----
+    def _is_material_thread(self, channel):
+        return bool(MATERIAL_CHANNEL_ID) and isinstance(channel, discord.Thread) and channel.parent_id == MATERIAL_CHANNEL_ID
+
+    async def on_thread_create(self, thread):
+        if not self._is_material_thread(thread):
+            return
+        storage.add_material(thread.id, thread.name)
+        await asyncio.sleep(1)  # 最初の投稿が届くのを待つ
+        await thread.send(
+            f"📥 「{thread.name}」の材料として受け付けます。メモ・URL・画像・PDF・テキストファイルを、"
+            "この投稿にどんどん返信してください。\n毎朝の記事作りで、まだ記事にしていない材料を古い順に使います。",
+            view=MaterialView(self),
+        )
+
+    async def on_material(self, message):
+        material = storage.get_material(thread_id=message.channel.id) or storage.add_material(
+            message.channel.id, message.channel.name)
+        skipped = await materials.save_message(material, message)
+        await message.add_reaction("📥")
+        if material["status"] == "used":
+            storage.set_material_status(material["id"], "open")
+            await message.channel.send("この材料は一度記事にしましたが、追加があったので次の記事作りでまた使います")
+        if skipped:
+            await message.reply("⚠️ 読めなかったもの:\n" + "\n".join(f"・{s}" for s in skipped)[:1800])
+
     # ---- 秘書との会話 ----
     async def on_message(self, message):
-        if message.author.bot or not SECRETARY_CHANNEL_ID:
+        if message.author.bot:
+            return
+        if self._is_material_thread(message.channel):
+            try:
+                return await self.on_material(message)
+            except Exception as e:  # noqa: BLE001 - 材料の保存失敗でBotを落とさない
+                log.exception("material save failed")
+                return await message.reply(f"⚠️ 材料を保存できませんでした: {e}")
+        if not SECRETARY_CHANNEL_ID:
             return
         if message.channel.id != SECRETARY_CHANNEL_ID or not message.content.strip():
             return
@@ -257,31 +356,72 @@ class BrainBot(discord.Client):
     async def _wait_weekly(self):
         await self.wait_until_ready()
 
+    @tasks.loop(hours=1)
+    async def price_task(self):
+        if not storage.price_watch_drafts():
+            return
+        try:
+            async with browser_lock:
+                async with BrainClient(headless=True) as bc:
+                    events = await pricing.check_all(bc)
+        except NotLoggedIn as e:
+            events = [f"🔒 値上げの確認ができません: {e}"] if storage.get_setting("login_warned") != "1" else []
+            storage.set_setting("login_warned", "1")
+        except Exception:  # noqa: BLE001 - 次の回にもう一度試す
+            log.exception("price task failed")
+            return
+        else:
+            storage.set_setting("login_warned", "0")
+        for text in events:
+            await self.report_channel().send(text[:1900])
+
+    @price_task.before_loop
+    async def _wait_price(self):
+        await self.wait_until_ready()
+
     # ---- draft lifecycle ----
-    async def make_draft(self, theme=None):
-        """(draft_id, None) か、失敗したら (None, 理由) を返す。"""
+    async def make_draft(self, theme=None, material=None):
+        """(draft_id, None) か、失敗したら (None, 理由) を返す。
+
+        何も指定が無ければ、#材料 のまだ使っていない材料 → テーマリストの順に使う。
+        """
         ch = self.draft_channel()
+        if not theme and not material:
+            material = storage.next_material()
+        if material:
+            theme = {"theme": material["theme"]}
         theme = theme or storage.next_theme()
         if not theme:
-            reason = "テーマが登録されていません。/テーマ追加 で追加してください。"
+            reason = "材料もテーマもありません。#材料 に材料を送るか、/テーマ追加 で追加してください。"
             await ch.send(reason)
             return None, reason
-        note = await ch.send(f"🧠 有料記事を生成中…　テーマ: {theme['theme']}")
+        src = "（#材料 から）" if material else ""
+        note = await ch.send(f"🧠 有料記事を生成中…　テーマ: {theme['theme']}{src}")
         try:
-            data = await generator.generate(theme, storage.published_titles())
+            data = await generator.generate(theme, storage.published_titles(), material)
         except generator.GenerationError as e:
             await note.edit(content=f"⚠️ 生成に失敗しました: {e}")
             return None, str(e)
+        if material:
+            data["material_id"] = material["id"]
         issues = checker.check(data)
-        draft_id = storage.create_draft(theme.get("id"), data, issues)
+        draft_id = storage.create_draft(theme.get("id"), data, issues, material["id"] if material else None)
+        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+        storage.update_draft(draft_id, data=data)
         if theme.get("id"):
             storage.mark_theme_used(theme["id"])
+        if material:
+            storage.set_material_status(material["id"], "used")
         msg = await ch.send(
             content="📝 今日の下書きです。メイン画像と図は添付の画像、本文（有料ラインの位置つき）は添付のHTMLで確認できます。",
             embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
         await note.delete()
+        if material:
+            thread = self.get_channel(material["thread_id"])
+            if thread:
+                await thread.send(f"📝 この材料で下書き #{draft_id} を作りました（#下書き を見てください）: {msg.jump_url}")
         return draft_id, None
 
     async def revise_draft(self, draft_id, instruction, channel):
@@ -290,12 +430,34 @@ class BrainBot(discord.Client):
             data = await generator.revise(draft["data"], instruction)
         except generator.GenerationError as e:
             return await channel.send(f"⚠️ 修正に失敗しました: {e}")
+        if draft["data"].get("material_id"):
+            data["material_id"] = draft["data"]["material_id"]
+        if data.get("thumbnail") != draft["data"].get("thumbnail"):  # サムネの文字が変わったときだけ描き直す
+            data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+        else:
+            data["thumbnail_by"], data["thumbnail_error"] = draft["data"].get("thumbnail_by"), draft["data"].get(
+                "thumbnail_error")
         issues = checker.check(data)
         storage.update_draft(draft_id, data=data, issues=issues)
         old = await channel.fetch_message(draft["message_id"])
         await old.edit(view=None)
         msg = await channel.send(
             content=f"✏️ 修正版です（指示: {instruction[:100]}）",
+            embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
+        )
+        storage.update_draft(draft_id, message_id=msg.id)
+
+    async def remake_thumbnail(self, draft_id, channel, **fields):
+        draft = storage.get_draft(draft_id)
+        data = dict(draft["data"])
+        data["thumbnail"] = {**(data.get("thumbnail") or {}), **fields}
+        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+        issues = checker.check(data)
+        storage.update_draft(draft_id, data=data, issues=issues)
+        old = await channel.fetch_message(draft["message_id"])
+        await old.edit(view=None)
+        msg = await channel.send(
+            content="🎨 サムネを作り直しました",
             embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
@@ -308,7 +470,7 @@ class BrainBot(discord.Client):
         await interaction.message.edit(embed=draft_embed(draft_id, data, issues))
         sub = f" ＞ {data['subcategory']}" if data.get("subcategory") else ""
         await interaction.response.send_message(
-            f"💴 下書き #{draft_id} の販売設定を {data['price']:,}円 ・ {data['category']}{sub} にしました")
+            f"💴 下書き #{draft_id} の販売設定を {price_plan(data['price'])} ・ {data['category']}{sub} にしました")
 
     async def publish(self, draft):
         """Brain に投稿して (status, url) を返す。失敗は BrainError / NotLoggedIn。"""
@@ -317,9 +479,11 @@ class BrainBot(discord.Client):
             imgs = await images.render(draft["id"], data)
             async with BrainClient() as bc:
                 article_id, url = await bc.create(data, imgs["thumbnail"], imgs["figures"],
-                                                  publish=AUTO_PUBLISH, affiliate_rate=AFFILIATE_RATE)
+                                                  publish=AUTO_PUBLISH, affiliate_rate=AFFILIATE_RATE,
+                                                  review_reward=pricing.review_reward())
         status = "published" if AUTO_PUBLISH else "saved"
-        storage.update_draft(draft["id"], status=status, brain_id=article_id, brain_url=url)
+        storage.update_draft(draft["id"], status=status, brain_id=article_id, brain_url=url,
+                             submitted_at=storage.now(), price_stage=0)
         return status, url
 
     async def publish_draft(self, draft, message, channel):
@@ -331,7 +495,8 @@ class BrainBot(discord.Client):
             return await channel.send(f"⚠️ 投稿に失敗しました（もう一度 [承認して公開申請] を押せます）: {e}")
         label = DONE_LABEL[status]
         await message.edit(embed=draft_embed(draft["id"], draft["data"], draft["issues"], label), view=None)
-        await channel.send(f"✅ {label}: {url}" + ("\n（Brainの審査が終わると公開されます）" if status == "published" else ""))
+        await channel.send(f"✅ {label}: {url}" + (
+            "\n（Brainの審査が終わると公開されます。公開されたら自動の値上げが始まります）" if status == "published" else ""))
         if status == "published" and self.report_channel():
             await self.report_channel().send(
                 f"📣 今日は「{draft['data']['title']}」（{draft['data']['price']:,}円）を公開申請しました\n{url}")
@@ -440,6 +605,23 @@ def register_commands(bot):
             f"{t['id']}. {t['theme']}（{t['price'] or '既定'}円 / {t['category'] or '既定'}）" for t in themes
         ) or "未使用のテーマはありません"
         await interaction.response.send_message(text[:1900])
+
+    @bot.tree.command(name="材料一覧", description="#材料 に届いた、まだ記事にしていない材料を表示する")
+    async def list_materials_cmd(interaction):
+        items = storage.list_materials()
+        text = "\n".join(f"{m['id']}. {m['theme']}（材料{m['items']}件） <#{m['thread_id']}>" for m in items)
+        await interaction.response.send_message((text or "まだ記事にしていない材料はありません")[:1900])
+
+    @bot.tree.command(name="値上げ確認", description="公開状態を確認して、予定の日を過ぎた記事を今すぐ値上げする")
+    async def price_check_cmd(interaction):
+        await interaction.response.defer()
+        try:
+            async with browser_lock:
+                async with BrainClient(headless=True) as bc:
+                    events = await pricing.check_all(bc)
+        except BrainError as e:
+            return await interaction.followup.send(f"⚠️ {e}"[:1900])
+        await interaction.followup.send("\n".join(events)[:1900] or "変更はありませんでした")
 
     @bot.tree.command(name="秘書リセット", description="秘書との会話の記憶を消す")
     async def reset_chat_cmd(interaction):

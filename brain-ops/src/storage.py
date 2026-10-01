@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS drafts (
     message_id INTEGER,
     brain_id TEXT,                 -- Brain側の記事ID
     brain_url TEXT,
+    material_id INTEGER,           -- 材料から作った記事なら materials.id
+    live_at TEXT,                  -- Brainで公開された日時（審査が通った日時）
+    price_stage INTEGER,           -- PRICE_SCHEDULE の何段目の価格まで反映したか
+    submitted_at TEXT,             -- 公開申請（または下書き保存）した日時
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -36,6 +40,20 @@ CREATE TABLE IF NOT EXISTS chat_log (
     channel_id TEXT NOT NULL,
     role TEXT NOT NULL,            -- user / assistant
     content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS materials (
+    id INTEGER PRIMARY KEY,
+    thread_id INTEGER UNIQUE NOT NULL,  -- #材料 フォーラムの投稿（スレッド）
+    theme TEXT NOT NULL,           -- 投稿のタイトル
+    status TEXT NOT NULL,          -- open（まだ記事にしていない）/ used
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS material_items (
+    id INTEGER PRIMARY KEY,
+    material_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,            -- text / file（画像・PDFなど。Claudeが読む）/ url（取ってきた本文）
+    content TEXT NOT NULL,         -- 本文、またはファイルのパス
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sales_stats (
@@ -51,10 +69,18 @@ def now():
     return datetime.now(JST).isoformat(timespec="seconds")
 
 
+# 古いDBに後から足した列
+MIGRATIONS = [("drafts", "material_id", "INTEGER"), ("drafts", "live_at", "TEXT"), ("drafts", "price_stage", "INTEGER"),
+              ("drafts", "submitted_at", "TEXT")]
+
+
 def connect():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for table, col, typ in MIGRATIONS:
+        if col not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     return conn
 
 
@@ -118,11 +144,13 @@ def list_themes(unused_only=True, limit=20):
 
 
 # ---- drafts ----
-def create_draft(theme_id, data, issues):
+def create_draft(theme_id, data, issues, material_id=None):
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO drafts (theme_id, status, data, issues, created_at, updated_at) VALUES (?, 'pending', ?, ?, ?, ?)",
-            (theme_id, json.dumps(data, ensure_ascii=False), json.dumps(issues, ensure_ascii=False), now(), now()),
+            "INSERT INTO drafts (theme_id, material_id, status, data, issues, created_at, updated_at)"
+            " VALUES (?, ?, 'pending', ?, ?, ?, ?)",
+            (theme_id, material_id, json.dumps(data, ensure_ascii=False), json.dumps(issues, ensure_ascii=False),
+             now(), now()),
         )
         return cur.lastrowid
 
@@ -164,9 +192,67 @@ def published_titles(limit=100):
 def posts_since(iso):
     with connect() as c:
         rows = c.execute(
-            "SELECT * FROM drafts WHERE status='published' AND updated_at>=? ORDER BY id", (iso,)
+            "SELECT * FROM drafts WHERE status='published' AND submitted_at>=? ORDER BY id", (iso,)
         ).fetchall()
     return [dict(r, data=json.loads(r["data"])) for r in rows]
+
+
+def price_watch_drafts():
+    """公開申請したが、価格の予定をまだ最後まで反映していない記事。"""
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM drafts WHERE status='published' AND brain_id IS NOT NULL ORDER BY id"
+        ).fetchall()
+    return [dict(r, data=json.loads(r["data"])) for r in rows]
+
+
+# ---- 材料（#材料 フォーラム）----
+def add_material(thread_id, theme):
+    with connect() as c:
+        c.execute("INSERT OR IGNORE INTO materials (thread_id, theme, status, created_at) VALUES (?, ?, 'open', ?)",
+                  (thread_id, theme, now()))
+        return dict(c.execute("SELECT * FROM materials WHERE thread_id=?", (thread_id,)).fetchone())
+
+
+def get_material(material_id=None, thread_id=None):
+    with connect() as c:
+        row = (c.execute("SELECT * FROM materials WHERE id=?", (material_id,)) if material_id else
+               c.execute("SELECT * FROM materials WHERE thread_id=?", (thread_id,))).fetchone()
+        return dict(row) if row else None
+
+
+def add_material_item(material_id, kind, content):
+    with connect() as c:
+        c.execute("INSERT INTO material_items (material_id, kind, content, created_at) VALUES (?, ?, ?, ?)",
+                  (material_id, kind, content, now()))
+
+
+def material_items(material_id):
+    with connect() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM material_items WHERE material_id=? ORDER BY id", (material_id,))]
+
+
+def next_material():
+    """まだ記事にしていない材料のうち、一番古いもの（中身が1つ以上あるもの）。"""
+    with connect() as c:
+        row = c.execute(
+            "SELECT m.* FROM materials m WHERE m.status='open'"
+            " AND EXISTS (SELECT 1 FROM material_items i WHERE i.material_id=m.id) ORDER BY m.id LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_materials(open_only=True, limit=30):
+    q = ("SELECT m.*, (SELECT COUNT(*) FROM material_items i WHERE i.material_id=m.id) AS items FROM materials m"
+         + (" WHERE m.status='open'" if open_only else "") + " ORDER BY m.id LIMIT ?")
+    with connect() as c:
+        return [dict(r) for r in c.execute(q, (limit,))]
+
+
+def set_material_status(material_id, status):
+    with connect() as c:
+        c.execute("UPDATE materials SET status=? WHERE id=?", (status, material_id))
 
 
 # ---- 売上のスナップショット ----

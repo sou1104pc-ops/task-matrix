@@ -13,7 +13,9 @@ from datetime import datetime, timedelta
 
 from . import checker, storage
 from .brain_client import BrainClient, BrainError, NotLoggedIn
-from .config import AFFILIATE_RATE, AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST
+from .config import (
+    AFFILIATE_RATE, AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST, LINE_URL, PRICE_SCHEDULE,
+)
 
 MAX_STEPS = 4          # ツール実行のループ上限
 HISTORY_TURNS = 16     # 会話履歴として渡す件数
@@ -38,6 +40,11 @@ TOOLS = [
         "args": {},
     },
     {
+        "name": "list_materials", "kind": "read",
+        "desc": "#材料 に届いた、まだ記事にしていない材料（テーマと件数）を見る。",
+        "args": {},
+    },
+    {
         "name": "list_themes", "kind": "read",
         "desc": "記事テーマの一覧を見る。",
         "args": {"unused_only": "true なら未使用のみ（省略時 true）"},
@@ -49,7 +56,7 @@ TOOLS = [
     },
     {
         "name": "get_status", "kind": "read",
-        "desc": "Botの状態（自動生成の停止有無・実行時刻・承認待ちの下書き・紹介料）を見る。",
+        "desc": "Botの状態（自動生成の停止有無・実行時刻・承認待ちの下書き・紹介料・値上げの予定・特典）を見る。",
         "args": {},
     },
     {
@@ -67,8 +74,8 @@ TOOLS = [
     },
     {
         "name": "set_draft_sales", "kind": "write",
-        "desc": "承認待ちの下書きの価格・カテゴリーを変える（#下書き の表示はそのまま。投稿時に反映）。",
-        "args": {"draft_id": "下書き番号", "price": "価格（省略可）", "category": "カテゴリー（省略可）",
+        "desc": "承認待ちの下書きの公開直後の価格・カテゴリーを変える（その後の値上げは自動。#下書き の表示はそのまま）。",
+        "args": {"draft_id": "下書き番号", "price": "公開直後の価格（省略可）", "category": "カテゴリー（省略可）",
                  "subcategory": "サブカテゴリー（省略可）"},
     },
     {
@@ -157,6 +164,12 @@ async def _tool_list_brain_articles(args, ctx):
     return {"件数": len(items), "記事": out}
 
 
+async def _tool_list_materials(args, ctx):
+    items = storage.list_materials()
+    return {"件数": len(items), "材料": [{"id": m["id"], "テーマ": m["theme"], "材料の数": m["items"],
+                                          "届いた日": m["created_at"]} for m in items]}
+
+
 async def _tool_list_themes(args, ctx):
     unused = args.get("unused_only", True)
     if isinstance(unused, str):
@@ -173,7 +186,7 @@ async def _tool_list_recent_posts(args, ctx):
     posts = storage.posts_since(since)
     return {"件数": len(posts),
             "記事": [{"タイトル": p["data"]["title"], "価格": p["data"]["price"], "URL": p["brain_url"],
-                      "日時": p["updated_at"]} for p in posts]}
+                      "日時": p["submitted_at"]} for p in posts]}
 
 
 async def _tool_get_status(args, ctx):
@@ -182,6 +195,8 @@ async def _tool_get_status(args, ctx):
         "生成時刻": DAILY_TIME, "日次レポート時刻": DAILY_REPORT_TIME,
         "承認後に公開申請まで行う(AUTO_PUBLISH)": AUTO_PUBLISH,
         "紹介料(アフィリエイト)": f"{int(AFFILIATE_RATE * 100)}%" if AFFILIATE_RATE else "なし",
+        "価格の予定(公開からの日数:円)": PRICE_SCHEDULE,
+        "レビュー特典(公式LINE)": LINE_URL or "なし",
         "承認待ちの下書き数": len(storage.pending_drafts()),
     }
 
@@ -289,6 +304,7 @@ async def _tool_publish_draft(args, ctx):
 IMPL = {
     "get_sales": _tool_get_sales,
     "list_brain_articles": _tool_list_brain_articles,
+    "list_materials": _tool_list_materials,
     "list_themes": _tool_list_themes,
     "list_recent_posts": _tool_list_recent_posts,
     "get_status": _tool_get_status,
