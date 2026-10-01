@@ -57,10 +57,12 @@ CREATE TABLE IF NOT EXISTS material_items (
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sales_stats (
-    date TEXT PRIMARY KEY,         -- JSTの日付 YYYY-MM-DD
+    date TEXT NOT NULL,            -- JSTの日付 YYYY-MM-DD
+    account TEXT NOT NULL,         -- アカウントid
     total_sales INTEGER,           -- 累計売上（その日の記録時点）
     total_count INTEGER,           -- 累計販売部数
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (date, account)
 );
 """
 
@@ -256,20 +258,21 @@ def set_material_status(material_id, status):
 
 
 # ---- 売上のスナップショット ----
-def save_sales_stats(date, total_sales, total_count):
-    """その日の累計値を記録する（同じ日に複数回呼ばれたら上書き）。"""
+def save_sales_stats(date, account, total_sales, total_count):
+    """その日の累計値をアカウントごとに記録する（同じ日に複数回呼ばれたら上書き）。"""
     with connect() as c:
         c.execute(
-            "INSERT OR REPLACE INTO sales_stats (date, total_sales, total_count, created_at) VALUES (?, ?, ?, ?)",
-            (date, total_sales, total_count, now()),
+            "INSERT OR REPLACE INTO sales_stats (date, account, total_sales, total_count, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (date, account, total_sales, total_count, now()),
         )
 
 
-def previous_sales_stats(date):
+def previous_sales_stats(date, account):
     """指定日より前で一番新しいスナップショットを返す（差分の計算に使う）。"""
     with connect() as c:
         row = c.execute(
-            "SELECT * FROM sales_stats WHERE date < ? ORDER BY date DESC LIMIT 1", (date,)
+            "SELECT * FROM sales_stats WHERE date < ? AND account=? ORDER BY date DESC LIMIT 1", (date, account)
         ).fetchone()
         return dict(row) if row else None
 

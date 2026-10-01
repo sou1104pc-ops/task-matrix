@@ -1,4 +1,4 @@
-"""公開後の自動値上げと、レビュー特典（公式LINEへの案内）。
+"""公開後の自動値上げ。
 
 公開申請した記事を1時間ごとに見に行き、
 1. Brain の審査が通って公開されたら、その日時（published_at）を記録する
@@ -6,19 +6,16 @@
 """
 from datetime import datetime
 
-from . import storage
-from .config import JST, LINE_URL, PRICE_SCHEDULE, REVIEW_REWARD_CONTENT, REVIEW_REWARD_METHOD, REVIEW_REWARD_TITLE
+from . import accounts, storage
+from .config import JST, PRICE_SCHEDULE
 
 
-def review_reward():
-    """公開申請に付けるレビュー特典。LINE_URL が無ければ None（特典なし）。"""
-    if not LINE_URL:
-        return None
-    return {
-        "title": REVIEW_REWARD_TITLE,
-        "content": REVIEW_REWARD_CONTENT or f"公式LINEで「{REVIEW_REWARD_TITLE}」をお渡ししています。",
-        "method": REVIEW_REWARD_METHOD.format(line_url=LINE_URL),
-    }
+def watching(account=None):
+    """値上げの予定がまだ残っている記事（account を指定すればそのアカウントの分だけ）。"""
+    last = len(PRICE_SCHEDULE) - 1
+    return [d for d in storage.price_watch_drafts()
+            if (d["price_stage"] or 0) < last
+            and (account is None or accounts.get(d["data"].get("account"))["id"] == account["id"])]
 
 
 def _parse(ts):
@@ -45,14 +42,11 @@ def is_live(article, now):
 
 
 async def check_all(client):
-    """値上げなどを実行して、#レポート に出す報告文のリストを返す。"""
+    """client のアカウントの記事について値上げなどを実行し、#レポート に出す報告文のリストを返す。"""
     now = datetime.now(JST)
     events = []
-    last = len(PRICE_SCHEDULE) - 1
-    for d in storage.price_watch_drafts():
-        if (d["price_stage"] or 0) >= last:
-            continue
-        title = d["data"]["title"][:40]
+    for d in watching(client.account):
+        title = f"［{client.account['name']}］{d['data']['title'][:40]}"
         if not d["live_at"]:
             a = await client.find_article(d["brain_id"])
             if not a:

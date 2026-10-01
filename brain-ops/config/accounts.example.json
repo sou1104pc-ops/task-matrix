@@ -1,0 +1,22 @@
+{
+  "_説明": "これを accounts.json にコピーして書き換える。name は #材料 フォーラムのタグ名と同じにする。1つ目が既定のアカウント。特典は有料部分のはじめ（reward_top_text）と最後（reward_bottom_text）に入る。片方を省くと reward_text を使う。line_url を空にすると特典なし。affiliate_rate を省くと .env の AFFILIATE_RATE（0.5）。",
+  "accounts": [
+    {
+      "id": "studio",
+      "name": "スタジオ開業",
+      "line_url": "https://lin.ee/xxxxxxx",
+      "reward_title": "開業準備チェックリスト（PDF）",
+      "reward_top_text": "先に特典のご案内です。公式LINEを友だち追加して「特典」と送ると、すぐに受け取れます。",
+      "reward_bottom_text": "最後まで読んでいただきありがとうございます。まだの方は、公式LINEから特典を受け取ってください。",
+      "reward_link_text": "公式LINEで特典を受け取る"
+    },
+    {
+      "id": "sub",
+      "name": "サブ",
+      "line_url": "https://lin.ee/yyyyyyy",
+      "reward_title": "テンプレート集",
+      "reward_text": "公式LINEを友だち追加して「特典」と送ってください。",
+      "affiliate_rate": 0.5
+    }
+  ]
+}

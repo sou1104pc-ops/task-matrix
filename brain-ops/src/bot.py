@@ -15,11 +15,11 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import checker, generator, images, materials, pricing, sales, secretary, storage, thumbnail
+from . import accounts, checker, generator, images, materials, pricing, sales, secretary, storage, thumbnail
 from .brain_client import BrainClient, BrainError, NotLoggedIn
 from .config import (
-    AFFILIATE_RATE, AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DEFAULT_CATEGORY, DISCORD_TOKEN, DRAFT_CHANNEL_ID,
-    DRAFTS_DIR, GUILD_ID, JST, LINE_URL, MATERIAL_CHANNEL_ID, PRICE_SCHEDULE, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID,
+    AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DEFAULT_CATEGORY, DISCORD_TOKEN, DRAFT_CHANNEL_ID,
+    DRAFTS_DIR, GUILD_ID, JST, MATERIAL_CHANNEL_ID, PRICE_SCHEDULE, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID,
 )
 
 log = logging.getLogger("bot")
@@ -35,6 +35,10 @@ DONE_LABEL = {"published": "公開申請済み", "saved": "Brain下書き保存�
 def preview_html(data, imgs):
     thumb = base64.b64encode(imgs["thumbnail"].read_bytes()).decode()
     free, paid = checker.split_paywall(data["body_html"])
+    account = accounts.get(data.get("account"))
+    box = "<div style='background:#fff6ef;border-left:4px solid #f96204;padding:8px 16px;margin:16px 0'>{}</div>"
+    head, tail = accounts.reward_blocks(account, "top"), accounts.reward_blocks(account, "bottom")
+    paid = (box.format("".join(head)) if head else "") + paid + (box.format("".join(tail)) if tail else "")
     line = ("<div style='margin:32px 0;padding:12px;border:2px dashed #f96204;color:#f96204;text-align:center;"
             f"font-weight:bold'>ここから有料（{data['price']:,}円）</div>")
     return (
@@ -43,7 +47,7 @@ def preview_html(data, imgs):
         "<body style='max-width:720px;margin:auto;font-family:sans-serif;line-height:1.8;padding:16px'>"
         f"<img src='data:image/png;base64,{thumb}' style='width:100%;border-radius:8px'>"
         f"<h1>{data['title']}</h1>"
-        f"<p style='color:#888'>{data['price']:,}円 ・ {data['category']} {data.get('subcategory') or ''}</p>"
+        f"<p style='color:#888'>{account['name']} ・ {data['price']:,}円 ・ {data['category']} {data.get('subcategory') or ''}</p>"
         f"{images.embed_images(free, imgs)}{line}{images.embed_images(paid, imgs)}</body>"
     )
 
@@ -64,6 +68,8 @@ def price_plan(first_price):
 def draft_embed(draft_id, data, issues, status="承認待ち"):
     e = discord.Embed(title=data["title"][:250], description=(data.get("summary") or "")[:1000], color=0xF96204)
     sub = f" ＞ {data['subcategory']}" if data.get("subcategory") else ""
+    account = accounts.get(data.get("account"))
+    e.add_field(name="アカウント", value=account["name"], inline=False)
     e.add_field(name="販売設定", value=f"{price_plan(data['price'])}\n{data['category']}{sub}", inline=False)
     by = data.get("thumbnail_by")
     if by == "chatgpt":
@@ -71,8 +77,11 @@ def draft_embed(draft_id, data, issues, status="承認待ち"):
     elif by == "html":
         e.add_field(name="サムネ", value=f"⚠️ ChatGPTで作れず、仮のサムネです: {data.get('thumbnail_error') or ''}"[:1000],
                     inline=False)
-    if LINE_URL:
-        e.add_field(name="レビュー特典", value=f"公式LINEへ案内（{LINE_URL}）", inline=False)
+    if accounts.has_reward(account):
+        e.add_field(name="特典（有料部分のはじめと最後に掲載）",
+                    value=f"{account.get('reward_title') or '購入者限定の特典'}\n{account['line_url']}", inline=False)
+    else:
+        e.add_field(name="特典", value="なし（config/accounts.json に line_url が無い）", inline=False)
     e.add_field(name="自動チェック", value=format_issues(issues), inline=False)
     free, paid = checker.split_paywall(data["body_html"])
     e.set_footer(text=f"下書き #{draft_id} ・ 無料 {len(checker.text_of(free)):,}字 / "
@@ -153,6 +162,8 @@ class DraftView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
+        if len(accounts.ACCOUNTS) < 2:
+            self.remove_item(self.choose_account)
 
     def _draft(self, interaction):
         for d in storage.pending_drafts():
@@ -193,6 +204,14 @@ class DraftView(discord.ui.View):
         if not draft:
             return await interaction.response.send_message("この下書きは処理済みです", ephemeral=True)
         await interaction.response.send_modal(ThumbnailModal(self.bot, draft))
+
+    @discord.ui.select(placeholder="出すアカウントを変える", custom_id="draft:account", row=1,
+                       options=[discord.SelectOption(label=a["name"], value=a["id"]) for a in accounts.ACCOUNTS])
+    async def choose_account(self, interaction, select):
+        draft = self._draft(interaction)
+        if not draft:
+            return await interaction.response.send_message("この下書きは処理済みです", ephemeral=True)
+        await self.bot.change_account(draft, select.values[0], interaction)
 
     @discord.ui.button(label="ボツ", style=discord.ButtonStyle.danger, custom_id="draft:reject")
     async def reject(self, interaction, button):
@@ -358,22 +377,24 @@ class BrainBot(discord.Client):
 
     @tasks.loop(hours=1)
     async def price_task(self):
-        if not storage.price_watch_drafts():
-            return
-        try:
-            async with browser_lock:
-                async with BrainClient(headless=True) as bc:
-                    events = await pricing.check_all(bc)
-        except NotLoggedIn as e:
-            events = [f"🔒 値上げの確認ができません: {e}"] if storage.get_setting("login_warned") != "1" else []
-            storage.set_setting("login_warned", "1")
-        except Exception:  # noqa: BLE001 - 次の回にもう一度試す
-            log.exception("price task failed")
-            return
-        else:
-            storage.set_setting("login_warned", "0")
-        for text in events:
-            await self.report_channel().send(text[:1900])
+        for account in accounts.ACCOUNTS:
+            if not pricing.watching(account):
+                continue
+            key = f"login_warned:{account['id']}"
+            try:
+                async with browser_lock:
+                    async with BrainClient(account, headless=True) as bc:
+                        events = await pricing.check_all(bc)
+            except NotLoggedIn as e:
+                events = [f"🔒 値上げの確認ができません: {e}"] if storage.get_setting(key) != "1" else []
+                storage.set_setting(key, "1")
+            except Exception:  # noqa: BLE001 - 次の回にもう一度試す
+                log.exception("price task failed: %s", account["id"])
+                continue
+            else:
+                storage.set_setting(key, "0")
+            for text in events:
+                await self.report_channel().send(text[:1900])
 
     @price_task.before_loop
     async def _wait_price(self):
@@ -388,8 +409,10 @@ class BrainBot(discord.Client):
         ch = self.draft_channel()
         if not theme and not material:
             material = storage.next_material()
+        account = accounts.DEFAULT
         if material:
             theme = {"theme": material["theme"]}
+            account = await self.material_account(material)
         theme = theme or storage.next_theme()
         if not theme:
             reason = "材料もテーマもありません。#材料 に材料を送るか、/テーマ追加 で追加してください。"
@@ -398,10 +421,11 @@ class BrainBot(discord.Client):
         src = "（#材料 から）" if material else ""
         note = await ch.send(f"🧠 有料記事を生成中…　テーマ: {theme['theme']}{src}")
         try:
-            data = await generator.generate(theme, storage.published_titles(), material)
+            data = await generator.generate(theme, storage.published_titles(), material, account)
         except generator.GenerationError as e:
             await note.edit(content=f"⚠️ 生成に失敗しました: {e}")
             return None, str(e)
+        data["account"] = account["id"]
         if material:
             data["material_id"] = material["id"]
         issues = checker.check(data)
@@ -430,8 +454,9 @@ class BrainBot(discord.Client):
             data = await generator.revise(draft["data"], instruction)
         except generator.GenerationError as e:
             return await channel.send(f"⚠️ 修正に失敗しました: {e}")
-        if draft["data"].get("material_id"):
-            data["material_id"] = draft["data"]["material_id"]
+        for k in ("material_id", "account"):
+            if draft["data"].get(k):
+                data[k] = draft["data"][k]
         if data.get("thumbnail") != draft["data"].get("thumbnail"):  # サムネの文字が変わったときだけ描き直す
             data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
         else:
@@ -462,6 +487,33 @@ class BrainBot(discord.Client):
         )
         storage.update_draft(draft_id, message_id=msg.id)
 
+    async def material_account(self, material):
+        """#材料 の投稿のタグから、出すアカウントを決める。"""
+        thread = self.get_channel(material["thread_id"])
+        if thread is None:
+            try:
+                thread = await self.fetch_channel(material["thread_id"])
+            except discord.HTTPException:
+                return accounts.DEFAULT
+        return accounts.from_tags([t.name for t in getattr(thread, "applied_tags", [])])
+
+    async def change_account(self, draft, account_id, interaction):
+        data = {**draft["data"], "account": account_id}
+        old = accounts.get(draft["data"].get("account"))
+        new = accounts.get(account_id)
+        if old["id"] == new["id"]:
+            return await interaction.response.send_message(f"すでに {new['name']} です", ephemeral=True)
+        storage.update_draft(draft["id"], data=data)
+        await interaction.response.send_message(
+            f"🔁 下書き #{draft['id']} を {new['name']} で出すように変えました（特典も {new['name']} のものになります）")
+        await interaction.message.edit(view=None)
+        msg = await interaction.channel.send(
+            content=f"🔁 アカウントを {new['name']} に変えた版です",
+            embed=draft_embed(draft["id"], data, draft["issues"]), files=await draft_files(draft["id"], data),
+            view=DraftView(self),
+        )
+        storage.update_draft(draft["id"], message_id=msg.id)
+
     async def update_sales(self, draft_id, interaction, **fields):
         draft = storage.get_draft(draft_id)
         data = {**draft["data"], **fields}
@@ -477,10 +529,8 @@ class BrainBot(discord.Client):
         data = draft["data"]
         async with browser_lock:
             imgs = await images.render(draft["id"], data)
-            async with BrainClient() as bc:
-                article_id, url = await bc.create(data, imgs["thumbnail"], imgs["figures"],
-                                                  publish=AUTO_PUBLISH, affiliate_rate=AFFILIATE_RATE,
-                                                  review_reward=pricing.review_reward())
+            async with BrainClient(accounts.get(data.get("account"))) as bc:
+                article_id, url = await bc.create(data, imgs["thumbnail"], imgs["figures"], publish=AUTO_PUBLISH)
         status = "published" if AUTO_PUBLISH else "saved"
         storage.update_draft(draft["id"], status=status, brain_id=article_id, brain_url=url,
                              submitted_at=storage.now(), price_stage=0)
@@ -498,8 +548,9 @@ class BrainBot(discord.Client):
         await channel.send(f"✅ {label}: {url}" + (
             "\n（Brainの審査が終わると公開されます。公開されたら自動の値上げが始まります）" if status == "published" else ""))
         if status == "published" and self.report_channel():
+            name = accounts.get(draft["data"].get("account"))["name"]
             await self.report_channel().send(
-                f"📣 今日は「{draft['data']['title']}」（{draft['data']['price']:,}円）を公開申請しました\n{url}")
+                f"📣 今日は［{name}］「{draft['data']['title']}」（{draft['data']['price']:,}円）を公開申請しました\n{url}")
 
     async def mark_draft_done(self, draft, status):
         """秘書が投稿したとき、#下書き の承認ボタンを消して報告する。"""
@@ -521,10 +572,10 @@ def _sign(n):
     return f"+{n:,}" if n >= 0 else f"{n:,}"
 
 
-async def fetch_sales(day):
-    """(累計売上, 累計部数, その日の販売リスト) を Brain から取る。"""
+async def fetch_sales(day, account=None):
+    """(累計売上, 累計部数, その日の販売リスト) を Brain から取る（アカウント1つぶん）。"""
     async with browser_lock:
-        async with BrainClient(headless=True) as bc:
+        async with BrainClient(account, headless=True) as bc:
             total_raw = await bc.total_sales()
             hist_raw = await bc.sales_histories(day.strftime("%Y/%m"))
     total, count = sales.totals(total_raw)
@@ -541,28 +592,28 @@ async def daily_report():
     posts = storage.posts_since(since)
 
     e = discord.Embed(title=f"📊 Brain デイリーレポート（{today:%-m/%-d}）", color=0xF96204)
-    try:
-        total, count, todays = await fetch_sales(today)
-    except Exception as ex:  # noqa: BLE001 - 売上が取れなくてもレポートは出す
-        log.exception("daily sales failed")
-        e.add_field(name="売上", value=f"取得できませんでした: {ex}"[:1000], inline=False)
-    else:
-        e.add_field(name="今日の売上", value=f"{len(todays)}部 / {sum(s['amount'] for s in todays):,}円", inline=True)
-        if total is not None:
-            prev = storage.previous_sales_stats(today.isoformat())
-            storage.save_sales_stats(today.isoformat(), total, count)
-            if prev and prev["total_sales"] is not None:
-                e.add_field(name=f"前回（{prev['date']}）からの増分",
-                            value=f"{_sign(total - prev['total_sales'])}円", inline=True)
-            e.add_field(name="累計売上", value=f"{total:,}円" + (f" / {count:,}部" if count is not None else ""),
-                        inline=True)
-        else:
-            e.add_field(name="累計売上", value="読み取れませんでした（src/sales.py の項目名を確認）", inline=True)
-        if todays:
-            e.add_field(name="今日売れた記事",
-                        value="\n".join(f"{s['amount']:,}円 {s['title'][:40]}" for s in todays[:10]), inline=False)
+    for account in accounts.ACCOUNTS:
+        e.add_field(name=f"■ {account['name']}", value=await _account_sales_text(account, today), inline=False)
     e.add_field(name="今日の公開申請", value=f"{len(posts)}本", inline=True)
     return e
+
+
+async def _account_sales_text(account, today):
+    try:
+        total, count, todays = await fetch_sales(today, account)
+    except Exception as ex:  # noqa: BLE001 - 売上が取れなくてもレポートは出す
+        log.exception("daily sales failed: %s", account["id"])
+        return f"売上を取得できませんでした: {ex}"[:1000]
+    lines = [f"今日: {len(todays)}部 / {sum(s['amount'] for s in todays):,}円"]
+    if total is not None:
+        prev = storage.previous_sales_stats(today.isoformat(), account["id"])
+        storage.save_sales_stats(today.isoformat(), account["id"], total, count)
+        diff = f"（前回 {prev['date']} から {_sign(total - prev['total_sales'])}円）" if prev and prev["total_sales"] is not None else ""
+        lines.append(f"累計: {total:,}円" + (f" / {count:,}部" if count is not None else "") + diff)
+    else:
+        lines.append("累計: 読み取れませんでした（src/sales.py の項目名を確認）")
+    lines += [f"・{s['amount']:,}円 {s['title'][:36]}" for s in todays[:8]]
+    return "\n".join(lines)[:1000]
 
 
 def weekly_report():
@@ -615,12 +666,16 @@ def register_commands(bot):
     @bot.tree.command(name="値上げ確認", description="公開状態を確認して、予定の日を過ぎた記事を今すぐ値上げする")
     async def price_check_cmd(interaction):
         await interaction.response.defer()
-        try:
-            async with browser_lock:
-                async with BrainClient(headless=True) as bc:
-                    events = await pricing.check_all(bc)
-        except BrainError as e:
-            return await interaction.followup.send(f"⚠️ {e}"[:1900])
+        events = []
+        for account in accounts.ACCOUNTS:
+            if not pricing.watching(account):
+                continue
+            try:
+                async with browser_lock:
+                    async with BrainClient(account, headless=True) as bc:
+                        events += await pricing.check_all(bc)
+            except BrainError as e:
+                events.append(f"⚠️ {e}")
         await interaction.followup.send("\n".join(events)[:1900] or "変更はありませんでした")
 
     @bot.tree.command(name="秘書リセット", description="秘書との会話の記憶を消す")

@@ -5,10 +5,9 @@ import re
 import urllib.request
 from datetime import datetime
 
-from . import materials
+from . import accounts, materials
 from .config import (
-    CLAUDE_CMD, DATA, DEFAULT_CATEGORY, DEFAULT_PRICE, DEFAULT_SUBCATEGORY, JST, LINE_URL, PRICE_SCHEDULE,
-    REVIEW_REWARD_TITLE, prompt,
+    CLAUDE_CMD, DATA, DEFAULT_CATEGORY, DEFAULT_PRICE, DEFAULT_SUBCATEGORY, JST, PRICE_SCHEDULE, prompt,
 )
 
 CATEGORIES_URL = "https://api.brain-market.com/v2/categories"
@@ -90,15 +89,16 @@ def price_text(first_price):
     return f"公開直後は{first_price:,}円、{later}に値上げします。最終価格の{steps[-1][1]:,}円に見合う内容にしてください"
 
 
-def _reward_text():
-    if not LINE_URL:
-        return "（今回はレビュー特典はありません。特典について本文に書かないこと）"
-    return (f"この記事には「レビュー特典」があります（購入してレビューを書いた人だけが受け取れる）。特典名:「{REVIEW_REWARD_TITLE}」\n"
-            "無料部分の「この記事で手に入るもの」の後に、レビュー特典があることを1〜2文で短く書いてください。"
-            "受け取り方・URL・LINEの登録方法は本文に書かないこと（特典の欄に別で表示されます）")
+def _reward_text(account):
+    if not accounts.has_reward(account):
+        return "（この記事には特典はありません。特典について本文に書かないこと）"
+    title = account.get("reward_title") or "購入者限定の特典"
+    return (f"購入者限定の特典「{title}」があります。特典の案内（受け取り方・URL）は、有料部分のはじめと最後に"
+            "システムが自動で差し込むので、本文には書かないでください。\n"
+            "無料部分の「この記事で手に入るもの」の最後に、購入者限定の特典があることを1文だけ書いてください（受け取り方は書かない）")
 
 
-async def generate(theme, past_titles, material=None):
+async def generate(theme, past_titles, material=None, account=None):
     """theme は {theme, persona, price, category, subcategory}。material は #材料 の投稿（あれば中身を使う）。"""
     try:
         cats = await asyncio.to_thread(fetch_categories)
@@ -113,7 +113,7 @@ async def generate(theme, past_titles, material=None):
         persona=theme.get("persona") or "このテーマで悩んでいる人",
         price=price_text(price),
         materials=material_text or "（材料はありません。テーマから一般的に役立つ内容を書いてください）",
-        reward=_reward_text(),
+        reward=_reward_text(accounts.get(account and account["id"])),
         categories=_categories_text(cats) or f"- {DEFAULT_CATEGORY}",
         past_titles="\n".join(f"- {t}" for t in past_titles) or "（なし）",
         year=datetime.now(JST).year,
@@ -129,7 +129,7 @@ async def revise(draft, instruction):
     text = prompt("revise").format(
         instruction=instruction,
         price=price_text(draft["price"]),
-        reward=_reward_text(),
+        reward=_reward_text(accounts.get(draft.get("account"))),
         draft_json=json.dumps(body, ensure_ascii=False),
     )
     data = _parse_article(await _run_claude(text))

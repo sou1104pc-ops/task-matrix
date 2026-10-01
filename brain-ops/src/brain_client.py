@@ -4,15 +4,15 @@ Brain の画面は裏で api.brain-market.com を呼んでいるので、画面�
 （画面の見た目が変わっても壊れにくい）。ログイン情報は、Playwright のブラウザに保存したログイン状態
 （Cookie `_brain-market-v2` に入っているトークン）をそのまま使う。
 
-初回だけ `python -m src.brain_client login` でブラウザを開いて手動ログインする。
-動作確認は `python -m src.brain_client test`（Brainに下書きを1本保存するだけで、公開申請はしない）。
+初回だけ `python -m src.brain_client login <アカウントid>` でブラウザを開いて手動ログインする（アカウントごと）。
+動作確認は `python -m src.brain_client test <アカウントid>`（Brainに下書きを1本保存するだけで、公開申請はしない）。
 
 投稿の流れ（画面の［下書き保存］→［販売設定に進む］→［有料エリアの設定に進む］→［公開申請］と同じ）:
   POST  /v2/articles/draft            下書きを作る → 記事ID
   POST  /v2/articles/{id}/eyecatch    メイン画像
   POST  /v2/items                     本文の画像 → URL
   PATCH /v2/articles/{id}/draft       タイトルと本文を保存
-  POST  /v2/articles/{id}/publish     価格・カテゴリ・有料ライン・レビュー特典を付けて公開申請（Brainの審査後に公開）
+  POST  /v2/articles/{id}/publish     価格・カテゴリ・有料ラインを付けて公開申請（Brainの審査後に公開）
 
 公開後の値上げ（画面の「販売設定」と同じ）:
   GET   /v2/current/articles           公開状態（status / inspect_status / published_at）を見る
@@ -26,8 +26,7 @@ from urllib.parse import quote, unquote
 
 from playwright.async_api import async_playwright
 
-from . import images
-from .config import BROWSER_PROFILE
+from . import accounts, images
 
 SITE = "https://brain-market.com"
 API = "https://api.brain-market.com"
@@ -68,17 +67,19 @@ def split_blocks(html):
     return [b for b in blocks if b.strip()]
 
 
-def brain_blocks(body_html, image_urls):
+def brain_blocks(body_html, image_urls, paid_head=(), paid_tail=()):
     """生成した本文を Brain の形式の行リストにする。(行リスト, 有料ラインの位置) を返す。
 
     - <p>[[FIG:id]]</p> → アップロード済みの <img>
     - <p>[[PAYWALL]]</p> → 有料ラインの位置（その行より前が無料部分）
     - <h2> <h3> は Brain のエディタと同じ class と番号を付ける（目次に使われる）
+    - paid_head / paid_tail は有料部分のはじめ・うしろに差し込む行（特典の案内）
     """
     blocks, pay_index, h2, h3 = [], None, 0, 0
     for b in split_blocks(body_html):
         if PAYWALL.fullmatch(b.strip()):
             pay_index = len(blocks)
+            blocks += list(paid_head)
             continue
         fig = images.MARKER.fullmatch(b.strip())
         if fig:
@@ -94,6 +95,8 @@ def brain_blocks(body_html, image_urls):
             h3 += 1
             b = f'<h3 class="heading-h3" data-parent="{h2}" data-number="{h3}">{m.group(2)}</h3>'
         blocks.append(b)
+    if pay_index is not None:
+        blocks += list(paid_tail)
     return blocks, pay_index
 
 
@@ -103,14 +106,15 @@ def _encode_cookie(value):
 
 # ---------------------------------------------------------------- client
 class BrainClient:
-    def __init__(self, headless=True):
+    def __init__(self, account=None, headless=True):
+        self.account = account or accounts.DEFAULT
         self.headless = headless
         self._auth = None
 
     async def __aenter__(self):
         self._pw = await async_playwright().start()
         self.ctx = await self._pw.chromium.launch_persistent_context(
-            str(BROWSER_PROFILE), headless=self.headless, locale="ja-JP", viewport={"width": 1280, "height": 900},
+            str(accounts.profile_dir(self.account)), headless=self.headless, locale="ja-JP", viewport={"width": 1280, "height": 900},
             user_agent=USER_AGENT,
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else await self.ctx.new_page()
@@ -136,7 +140,8 @@ class BrainClient:
                 v = {}
             h = v.get("headers") or {}
             if not v.get("isSignedIn") or not h.get("access-token"):
-                raise NotLoggedIn("Brainにログインしていません。`python -m src.brain_client login` を実行してください")
+                raise NotLoggedIn(f"Brain（{self.account['name']}）にログインしていません。"
+                                  f"`python -m src.brain_client login {self.account['id']}` を実行してください")
             self._auth = {k: h[k] for k in ("access-token", "client", "uid") if h.get(k)}
         return {**self._auth, "Accept": "application/json", "Origin": SITE, "Referer": f"{SITE}/"}
 
@@ -176,7 +181,8 @@ class BrainClient:
         except json.JSONDecodeError:
             data = {"raw": text[:300]}
         if resp.status == 401:
-            raise NotLoggedIn("Brainのログインが切れています。`python -m src.brain_client login` をやり直してください")
+            raise NotLoggedIn(f"Brain（{self.account['name']}）のログインが切れています。"
+                              f"`python -m src.brain_client login {self.account['id']}` をやり直してください")
         if resp.status >= 400:
             msgs = data.get("error_messages") or data.get("errors") or data
             raise BrainError(f"{method} {path} が失敗しました（HTTP {resp.status}）: {msgs}")
@@ -185,7 +191,7 @@ class BrainClient:
     # ---- public API ----
     async def open_login(self):
         await self.page.goto(SITE)
-        print("ブラウザでBrainにログインしてください。ログインできたらこの画面で Enter を押します。")
+        print(f"ブラウザでBrain（{self.account['name']}）にログインしてください。ログインできたらこの画面で Enter を押します。")
         await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
 
     async def current_user(self):
@@ -248,13 +254,14 @@ class BrainClient:
             "is_sales_unlimited": cur.get("is_sales_unlimited", True),
         })
 
-    async def create(self, data, thumbnail, figures, publish=True, affiliate_rate=0, review_reward=None):
+    async def create(self, data, thumbnail, figures, publish=True):
         """記事を作る。publish=False なら Brain の下書き保存で止める。
 
         data には title / body_html / price / category / subcategory が入っている。
-        figures は {図id: PNG}。review_reward は {title, content, method}（無ければ特典なし）。
+        figures は {図id: PNG}。有料部分のはじめ・うしろにはアカウントの特典の案内を差し込む。
         戻り値は (記事ID, URL)。
         """
+        head, tail = accounts.reward_blocks(self.account, "top"), accounts.reward_blocks(self.account, "bottom")
         _, pay_index = brain_blocks(data["body_html"], {k: "-" for k in figures})
         if publish and not pay_index:
             raise BrainError("本文に有料ライン（[[PAYWALL]]）が無いか、先頭にあります")
@@ -264,7 +271,7 @@ class BrainClient:
         article_id = str(draft["id"])
         await self._upload(thumbnail, f"/v2/articles/{article_id}/eyecatch")
         urls = {fid: await self._upload(path, "/v2/items") for fid, path in figures.items()}
-        blocks, pay_index = brain_blocks(data["body_html"], urls)
+        blocks, pay_index = brain_blocks(data["body_html"], urls, head, tail)
         await self.api("PATCH", f"/v2/articles/{article_id}/draft",
                        body={"article": {"title": data["title"], "body": "".join(blocks)}})
         if not publish:
@@ -277,7 +284,7 @@ class BrainClient:
             "price": int(data["price"]),
             "sales_count": 0,
             "is_sales_unlimited": True,
-            "affiliate_rate": affiliate_rate,
+            "affiliate_rate": accounts.affiliate_rate(self.account),
             "affiliatable_only_purchaser": False,
             "category": data["category"],
             "subcategory": data.get("subcategory") or None,
@@ -285,9 +292,8 @@ class BrainClient:
             "published_at": None,
             "tags": [],
             "body": "".join(body),
-            "review_rewards": [{"title": review_reward["title"], "content": review_reward["content"], "position": 1}]
-            if review_reward else [],
-            "review_reward_receiving_method": review_reward["method"] if review_reward else None,
+            "review_rewards": [],
+            "review_reward_receiving_method": None,
             "recommendation_rewards": [],
             "recommendation_reward_receiving_method": None,
         })
@@ -297,9 +303,12 @@ class BrainClient:
         return article_id, url
 
 
-async def _main(cmd):
+async def _main(cmd, account_id=None):
+    if account_id and account_id not in accounts.BY_ID:
+        sys.exit(f"アカウント {account_id} は config/accounts.json にありません。あるもの: {list(accounts.BY_ID)}")
+    account = accounts.get(account_id)
     if cmd == "login":
-        async with BrainClient(headless=False) as bc:
+        async with BrainClient(account, headless=False) as bc:
             await bc.open_login()
             user = await bc.current_user()
         print("ログイン状態を保存しました:", user.get("account") or user.get("name") or user)
@@ -310,11 +319,11 @@ async def _main(cmd):
             "<p>自動投稿のテストです。この下書きは削除してください。</p><p>[[PAYWALL]]</p><h2>有料部分</h2><p>テスト</p>")}
         with TemporaryDirectory() as tmp:
             imgs = await images.render_to(Path(tmp), {"title": data["title"], "body_html": "", "figures": []})
-            async with BrainClient(headless=True) as bc:
+            async with BrainClient(account, headless=True) as bc:
                 aid, url = await bc.create(data, imgs["thumbnail"], {}, publish=False)
         print("Brainに下書きを保存しました（公開申請はしていません）:", url)
     elif cmd in ("sales", "articles", "categories", "me"):
-        async with BrainClient(headless=True) as bc:
+        async with BrainClient(account, headless=True) as bc:
             from datetime import datetime
             fn = {"sales": lambda: bc.sales_histories(datetime.now().strftime("%Y/%m")),
                   "articles": bc.my_articles, "categories": bc.categories, "me": bc.current_user}[cmd]
@@ -323,8 +332,9 @@ async def _main(cmd):
                 out = {"total_sales": await bc.total_sales(), "sales_histories": out}
         print(json.dumps(out, ensure_ascii=False, indent=2)[:6000])
     else:
-        print("使い方: python -m src.brain_client [login|test|me|categories|articles|sales]")
+        print("使い方: python -m src.brain_client [login|test|me|categories|articles|sales] [アカウントid]")
+        print("アカウント:", ", ".join(f"{a['id']}（{a['name']}）" for a in accounts.ACCOUNTS))
 
 
 if __name__ == "__main__":
-    asyncio.run(_main(sys.argv[1] if len(sys.argv) > 1 else ""))
+    asyncio.run(_main(sys.argv[1] if len(sys.argv) > 1 else "", sys.argv[2] if len(sys.argv) > 2 else None))

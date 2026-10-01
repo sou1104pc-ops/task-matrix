@@ -49,17 +49,11 @@ DEFAULT_PRICE = PRICE_SCHEDULE[0][1]
 # カテゴリーはAIが記事に合わせて選ぶ。選べなかったときの既定値
 DEFAULT_CATEGORY = env("DEFAULT_CATEGORY", "ビジネス")
 DEFAULT_SUBCATEGORY = env("DEFAULT_SUBCATEGORY", "")
-# 紹介料（Brainのアフィリエイト）。0 で紹介なし、0.1〜0.5（10〜50%）
+# 紹介料（Brainのアフィリエイト）。0 で紹介なし、0.1〜0.5（10〜50%）。アカウントごとに config/accounts.json で変えられる
 AFFILIATE_RATE = float(env("AFFILIATE_RATE", "0.5"))
 AFFILIATE_RATES = (0, 0.1, 0.2, 0.3, 0.4, 0.5)
 if AFFILIATE_RATE not in AFFILIATE_RATES:
     raise SystemExit(f"AFFILIATE_RATE は {AFFILIATE_RATES} のどれかにしてください（今: {AFFILIATE_RATE}）")
-
-# レビュー特典（購入者がレビューを書くと見られる）で公式LINEへ案内する。LINE_URL が空なら特典なし
-LINE_URL = env("LINE_URL", "")
-REVIEW_REWARD_TITLE = env("REVIEW_REWARD_TITLE", "公式LINE限定の特典")
-REVIEW_REWARD_CONTENT = env("REVIEW_REWARD_CONTENT", "").replace("\\n", "\n")
-REVIEW_REWARD_METHOD = env("REVIEW_REWARD_METHOD", "下のURLから公式LINEを友だち追加して、トークで「特典」と送ってください。\\n{line_url}").replace("\\n", "\n")
 
 # メイン画像（サムネ）は ChatGPT の画像生成で作る。OPENAI_API_KEY が空なら今までのHTMLのサムネ
 OPENAI_API_KEY = env("OPENAI_API_KEY", "")
@@ -67,7 +61,6 @@ OPENAI_IMAGE_MODEL = env("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_IMAGE_QUALITY = env("OPENAI_IMAGE_QUALITY", "high")
 
 DB_PATH = DATA / "brain.db"
-BROWSER_PROFILE = DATA / "browser-profile"
 DRAFTS_DIR = DATA / "drafts"
 SCREENSHOTS_DIR = DATA / "screenshots"
 MATERIALS_DIR = DATA / "materials"

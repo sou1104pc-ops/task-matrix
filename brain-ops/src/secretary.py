@@ -11,10 +11,10 @@ import json
 import re
 from datetime import datetime, timedelta
 
-from . import checker, storage
+from . import accounts, checker, storage
 from .brain_client import BrainClient, BrainError, NotLoggedIn
 from .config import (
-    AFFILIATE_RATE, AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST, LINE_URL, PRICE_SCHEDULE,
+    AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST, PRICE_SCHEDULE,
 )
 
 MAX_STEPS = 4          # ツール実行のループ上限
@@ -31,13 +31,13 @@ class SecretaryError(Exception):
 TOOLS = [
     {
         "name": "get_sales", "kind": "read",
-        "desc": "Brainの売上（累計と、指定日の販売）を調べる。",
-        "args": {"date": "YYYY-MM-DD（省略時は今日）"},
+        "desc": "Brainの売上（累計と、指定日の販売）をアカウントごとに調べる。",
+        "args": {"date": "YYYY-MM-DD（省略時は今日）", "account": "アカウントid（省略すると全アカウント）"},
     },
     {
         "name": "list_brain_articles", "kind": "read",
         "desc": "Brain上の自分の記事（審査中・公開中・下書きなど）を見る。",
-        "args": {},
+        "args": {"account": "アカウントid（省略すると1つ目のアカウント）"},
     },
     {
         "name": "list_materials", "kind": "read",
@@ -56,7 +56,7 @@ TOOLS = [
     },
     {
         "name": "get_status", "kind": "read",
-        "desc": "Botの状態（自動生成の停止有無・実行時刻・承認待ちの下書き・紹介料・値上げの予定・特典）を見る。",
+        "desc": "Botの状態（自動生成の停止有無・実行時刻・承認待ちの下書き・値上げの予定・アカウントごとの紹介料と特典）を見る。",
         "args": {},
     },
     {
@@ -143,17 +143,33 @@ def _price(v):
     return int(str(v).replace(",", "").replace("円", ""))
 
 
+def _account(args):
+    aid = (args.get("account") or "").strip()
+    if aid and aid not in accounts.BY_ID:
+        raise ValueError(f"アカウント {aid} はありません。あるもの: {list(accounts.BY_ID)}")
+    return accounts.get(aid)
+
+
 async def _tool_get_sales(args, ctx):
     from .bot import fetch_sales  # bot が secretary を読み込むので循環を避ける
     day = datetime.fromisoformat(args["date"]).date() if args.get("date") else datetime.now(JST).date()
-    total, count, sold = await fetch_sales(day)
-    return {"日付": day.isoformat(), "その日の販売部数": len(sold), "その日の売上": sum(s["amount"] for s in sold),
-            "その日売れた記事": sold[:20], "累計売上": total, "累計部数": count}
+    targets = [_account(args)] if args.get("account") else accounts.ACCOUNTS
+    out = {"日付": day.isoformat(), "アカウント別": []}
+    for account in targets:
+        try:
+            total, count, sold = await fetch_sales(day, account)
+        except Exception as e:  # noqa: BLE001 - 1つのアカウントの失敗で全体を止めない
+            out["アカウント別"].append({"アカウント": account["name"], "error": str(e)})
+            continue
+        out["アカウント別"].append({
+            "アカウント": account["name"], "その日の販売部数": len(sold), "その日の売上": sum(s["amount"] for s in sold),
+            "その日売れた記事": sold[:20], "累計売上": total, "累計部数": count})
+    return out
 
 
 async def _tool_list_brain_articles(args, ctx):
     async with ctx.browser_lock:
-        async with BrainClient(headless=True) as bc:
+        async with BrainClient(_account(args), headless=True) as bc:
             raw = await bc.my_articles()
     items = raw if isinstance(raw, list) else (raw.get("articles") or raw.get("items") or [raw])
     out = []
@@ -194,9 +210,11 @@ async def _tool_get_status(args, ctx):
         "毎朝の自動生成": "停止中" if storage.get_setting("paused") == "1" else "動作中",
         "生成時刻": DAILY_TIME, "日次レポート時刻": DAILY_REPORT_TIME,
         "承認後に公開申請まで行う(AUTO_PUBLISH)": AUTO_PUBLISH,
-        "紹介料(アフィリエイト)": f"{int(AFFILIATE_RATE * 100)}%" if AFFILIATE_RATE else "なし",
         "価格の予定(公開からの日数:円)": PRICE_SCHEDULE,
-        "レビュー特典(公式LINE)": LINE_URL or "なし",
+        "アカウント": [{"id": a["id"], "名前": a["name"],
+                        "紹介料": f"{int(accounts.affiliate_rate(a) * 100)}%",
+                        "特典": (a.get("reward_title") or "購入者限定の特典") if accounts.has_reward(a) else "なし",
+                        "LINE": a.get("line_url") or "なし"} for a in accounts.ACCOUNTS],
         "承認待ちの下書き数": len(storage.pending_drafts()),
     }
 
@@ -207,6 +225,7 @@ async def _tool_list_drafts(args, ctx):
         d = storage.get_draft(did)
         out.append({
             "draft_id": did, "タイトル": d["data"]["title"], "価格": d["data"]["price"],
+            "アカウント": accounts.get(d["data"].get("account"))["name"],
             "カテゴリー": d["data"]["category"],
             "チェック": "エラーあり（投稿不可）" if checker.has_error(d["issues"]) else "問題なし",
             "作成": d["created_at"],
