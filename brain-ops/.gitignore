@@ -1,0 +1,8 @@
+.env
+data/*.db
+data/browser-profile/
+data/drafts/
+data/screenshots/
+__pycache__/
+.venv/
+data/bot.log
