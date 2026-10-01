@@ -2,7 +2,7 @@
 
 Discord の #材料 に送った材料（メモ・URL・画像・PDF）をもとに、毎朝 AI（Mac mini の Claude Code）が Brain で販売する有料記事の下書きを作り、Discord に届けます。
 サムネの文字は Claude が考え、絵は ChatGPT（OpenAI の画像生成）が描きます。
-Discord で **[承認して公開申請]** を押すと Brain に投稿（公開申請）され、Brain の審査が終わると公開されます。
+Brain のアカウントは複数持てます（アカウントごとに特典＝公式LINEを変えられる）。Discord で **[承認して公開申請]** を押すと Brain に投稿（公開申請）され、Brain の審査が終わると公開されます。
 毎日夜には、その日の売上と公開申請をまとめたデイリーレポートが #レポート に届きます。
 
 note アフィリエイト Bot（`note-affiliate/`）と同じ仕組みですが、**別の Bot・別の Discord サーバー**で動く独立したプログラムです。
@@ -16,7 +16,7 @@ note アフィリエイト Bot（`note-affiliate/`）と同じ仕組みですが
             ↓
 Discord #下書き に届く　[承認して公開申請] [修正依頼] [販売設定] [サムネ作り直し] [ボツ]
             ↓ 承認
-Brain に公開申請（100円・紹介料50%・レビュー特典で公式LINEへ案内）→ #レポート に通知
+Brain に公開申請（100円・紹介料50%・有料部分のはじめと最後に公式LINEの特典案内）→ #レポート に通知
             ↓ Brainの審査が通って公開
 1時間ごとに確認して、公開から5日後に1,980円、7日後に2,980円へ自動で値上げ → #レポート に通知
 ```
@@ -28,6 +28,7 @@ Brain に公開申請（100円・紹介料50%・レビュー特典で公式LINE�
 | [承認して公開申請] | Brain に投稿して公開申請（チェックで ❌ があると押せません） |
 | [修正依頼] | 直してほしい点を書くと、AI が書き直して再提出（画像も作り直し） |
 | [販売設定] | 公開直後の価格・カテゴリー・サブカテゴリーを変える（その後の値上げは自動） |
+| 出すアカウントを変える（選択メニュー） | アカウントが2つ以上あるときだけ出ます。特典もそのアカウントのものに変わります |
 | [サムネ作り直し] | サムネの文字・絵の雰囲気を直して、ChatGPT にもう一度描いてもらう |
 | [ボツ] | その下書きを破棄 |
 | `/生成` | 今すぐ1本作る（テーマ・価格・カテゴリー指定も可） |
@@ -44,6 +45,7 @@ Brain に公開申請（100円・紹介料50%・レビュー特典で公式LINE�
 Discord で **フォーラム** チャンネル `#材料` を作り、IDを `.env` の `MATERIAL_CHANNEL_ID` に書きます。
 
 - **新しい投稿1つ＝記事1本ぶん**。投稿のタイトルがテーマになります（例:「レンタルスタジオの物件選び」）
+- 投稿に**アカウント名のタグ**を付けると、そのアカウントで出す記事になります（フォーラムの設定でアカウント名と同じタグを作っておく）
 - 本文や返信で、思いついたこと・手順・自分の経験・参考URL・スクショ・PDF・テキストファイルをどんどん送る（📥 が付けば保存済み）
 - 毎朝の記事作りは、まだ使っていない材料を古い順に使います。今すぐ作りたいときは投稿内の［この材料で今すぐ記事にする］
 - 音声・動画は読めません。文字起こししたテキストを送ってください
@@ -54,12 +56,20 @@ Discord で **フォーラム** チャンネル `#材料` を作り、IDを `.en
 `.env` の `PRICE_SCHEDULE=0:100,5:1980,7:2980`（公開からの日数:円）。公開＝Brainの審査が通って公開された日時です。
 Bot は1時間ごとに Brain の記事一覧を見て、公開を確認したら #レポート に知らせ、日数が来たら販売設定の価格だけを変えます。
 値上げに失敗したら #レポート に出して、1時間後にもう一度試します。審査で差し戻された記事も #レポート に知らせます。
+Brain は値上げしても再審査になりません。
 
-## レビュー特典で公式LINEへ
+## アカウントと特典（公式LINE）
 
-`.env` の `LINE_URL` を入れると、公開申請のときに Brain の「レビュー特典」を付けます（購入してレビューを書いた人だけが見られる欄）。
-特典名・中身・受け取り方は `REVIEW_REWARD_TITLE` / `REVIEW_REWARD_CONTENT` / `REVIEW_REWARD_METHOD`。
-本文には「レビュー特典あり」とだけ書き、LINEのURLや登録方法は本文に入れません（本文で外部へ誘導すると審査で止まりやすいため）。
+`config/accounts.example.json` を `config/accounts.json` にコピーして書き換えます（1つ目が既定のアカウント）。
+
+- `name` … #材料 フォーラムの**タグ名と同じ**にする。投稿にタグを付けると、そのアカウントで出す記事になる（タグ無しは1つ目）
+- `line_url` `reward_title` `reward_top_text` `reward_bottom_text` `reward_link_text` … 特典の案内。Bot が **有料部分の一番はじめと一番うしろ** に自動で差し込みます（AIの本文とは別なので、毎回同じ文面になります）。`line_url` が空ならそのアカウントは特典なし
+- `affiliate_rate` … そのアカウントだけ紹介料を変えるとき（省略で `.env` の 0.5）
+- 無料部分には「購入者限定の特典があります」と1文だけ入り、LINEのURLは有料部分にだけ載ります
+- 下書きのプレビューHTMLでも、特典の差し込み位置を確認できます
+
+ログインはアカウントごとです：`python -m src.brain_client login <id>`（ログイン状態は `data/browser-profile-<id>/`）。
+`config/accounts.json` が無いときは、アカウント「メイン」（id: main）1つ・特典なしで動きます。
 
 ## サムネ（ChatGPT）
 
@@ -74,7 +84,7 @@ Bot は1時間ごとに Brain の記事一覧を見て、公開を確認した�
 
 | 種類 | ツール |
 |---|---|
-| 調べる | `get_sales` `list_brain_articles` `list_materials` `list_themes` `list_recent_posts` `get_status` `list_drafts` |
+| 調べる（アカウント指定可） | `get_sales` `list_brain_articles` `list_materials` `list_themes` `list_recent_posts` `get_status` `list_drafts` |
 | 手元のデータを変える | `add_theme` `set_draft_sales` `set_paused` |
 | **Brainに反映される** | `generate_draft`（#下書き に出す）`publish_draft`（公開申請） |
 
@@ -85,7 +95,7 @@ Bot は1時間ごとに Brain の記事一覧を見て、公開を確認した�
 - 無料部分（1,500〜3,000字）：悩みへの共感 → この記事で手に入るもの → おすすめな人／向かない人 → 有料部分の目次
 - `<p>[[PAYWALL]]</p>` の位置が Brain の有料ラインになります
 - 有料部分（8,000〜15,000字）：手順・判断基準・テンプレートなど、すぐ使える内容
-- 無料部分には「レビュー特典あり」を短く入れます（LINE_URL を設定したとき）
+- 有料部分のはじめと最後に、アカウントごとの特典（公式LINE）の案内が入ります
 - カテゴリーは Brain のカテゴリー一覧から記事に合うものを AI が選びます
 - メイン画像（ChatGPT）1枚と図解2〜4枚を自動で作ります（図は `src/images.py`）
 
@@ -108,13 +118,14 @@ cd task-matrix/brain-ops
 source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
-cp .env.example .env   # トークン・ID・LINE_URL・OPENAI_API_KEY を書き込む
+cp .env.example .env   # トークン・ID・OPENAI_API_KEY を書き込む
+cp config/accounts.example.json config/accounts.json   # アカウントと特典（公式LINE）を書く
 ```
 
 ### 3. Brain にログインしておく（1回だけ）
 ```bash
-python -m src.brain_client login   # ブラウザが開くので Brain にログイン → ターミナルで Enter
-python -m src.brain_client test    # テスト用の下書きが Brain に保存されれば OK（公開申請はしません。後で削除してください）
+python -m src.brain_client login studio   # アカウントごとに。ブラウザが開くので Brain にログイン → ターミナルで Enter
+python -m src.brain_client test studio    # テスト用の下書きが Brain に保存されれば OK（公開申請はしません。後で削除してください）
 ```
 
 ### 4. 材料を送る
@@ -131,14 +142,14 @@ python -m src.bot
 Brain の画面が裏で呼んでいる API（`api.brain-market.com`）を、ログイン済みブラウザのトークンで直接呼んでいます。
 画面のボタンを押さないので、Brain の見た目が変わっても壊れにくい方式です（詳しくは `src/brain_client.py` の先頭）。
 
-- ログインが切れると「Brainにログインしていません」と出ます → `python -m src.brain_client login` をやり直す
-- 紹介料（Brainアフィリエイト）は `.env` の `AFFILIATE_RATE`（既定 0.5 = 50%）
+- ログインが切れると「Brain（アカウント名）にログインしていません」と出ます → `python -m src.brain_client login <id>` をやり直す
+- 紹介料（Brainアフィリエイト）は `.env` の `AFFILIATE_RATE`（既定 0.5 = 50%）。アカウントごとに `accounts.json` で変更可
 - `AUTO_PUBLISH=false` にすると Brain の下書き保存で止まります（公開申請は Brain の画面で自分で）
 
 ## 売上レポートについて
 
 売上は Brain の売上管理と同じ API（累計売上・今月の販売履歴）から取ります。項目名が公開されていないため、
-最初に `python -m src.brain_client sales` で中身を確認し、「読み取れませんでした」と出る場合は `src/sales.py` の候補名を直してください。
+最初に `python -m src.brain_client sales <id>` で中身を確認し、「読み取れませんでした」と出る場合は `src/sales.py` の候補名を直してください。
 「今日の売上」は今月の販売履歴の1ページ目から数えるので、1日に大量に売れた日は少なめに出ることがあります。
 
 ## 注意
@@ -154,7 +165,9 @@ src/checker.py        公開前チェック
 src/images.py         図解の PNG 作成（サムネの仮画像も）
 src/thumbnail.py      サムネを ChatGPT で作成
 src/materials.py      #材料 の保存と、プロンプトへの受け渡し
-src/pricing.py        公開後の自動値上げ・レビュー特典
+src/pricing.py        公開後の自動値上げ
+src/accounts.py       アカウントと特典の案内
+config/accounts.example.json  アカウント・特典の書き方
 src/brain_client.py   Brain への投稿（API）・ログイン
 src/sales.py          売上APIの読み取り
 src/secretary.py      #秘書 の会話エージェント
