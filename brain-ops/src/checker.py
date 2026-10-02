@@ -168,6 +168,8 @@ def check(data, material_text=None):
         issues.append(("warn", f"想定外のHTMLタグ: {', '.join(sorted(tags))}"))
 
     issues += check_figures(data)
+    if data.get("thumbnail_by") == "pending":
+        issues.append(("warn", "サムネがまだ仮です（ChatGPTで作った画像を、下書きに返信で送ってください）"))
     if material_text is None and data.get("material_id"):
         material_text = materials.prompt_text(data["material_id"])[0]
     issues += check_achievements(data, material_text)

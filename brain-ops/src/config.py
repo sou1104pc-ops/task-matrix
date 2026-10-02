@@ -57,7 +57,10 @@ AFFILIATE_RATES = (0, 0.1, 0.2, 0.3, 0.4, 0.5)
 if AFFILIATE_RATE not in AFFILIATE_RATES:
     raise SystemExit(f"AFFILIATE_RATE は {AFFILIATE_RATES} のどれかにしてください（今: {AFFILIATE_RATE}）")
 
-# メイン画像（サムネ）は ChatGPT の画像生成で作る。OPENAI_API_KEY が空なら今までのHTMLのサムネ
+# メイン画像（サムネ）の作り方
+#   manual: ChatGPT に貼るプロンプトを #下書き に出し、ChatGPT で作った画像を返信で送ってもらう（既定）
+#   api:    OpenAI の API で自動で作る（OPENAI_API_KEY が必要）
+THUMBNAIL_MODE = env("THUMBNAIL_MODE", "manual")
 OPENAI_API_KEY = env("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL = env("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_IMAGE_QUALITY = env("OPENAI_IMAGE_QUALITY", "high")

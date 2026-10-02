@@ -1,7 +1,9 @@
-"""メイン画像（サムネ）を ChatGPT（OpenAI の画像生成API）で作る。
+"""メイン画像（サムネ）を ChatGPT で作る。
 
 サムネに載せる文字（タイトル）は Claude が記事と一緒に考え（data["thumbnail"]）、
-ChatGPT にはその文字をそのまま入れたデザインを描いてもらう。
+ChatGPT にはその文字をそのまま入れたデザインを描いてもらう。作り方は2通り（.env の THUMBNAIL_MODE）:
+- manual（既定）: ChatGPT にそのまま貼るプロンプトを #下書き に出し、ChatGPT で作った画像を返信で送ってもらう
+- api: OpenAI の画像生成API で自動で作る
 OpenAI は横長の 1536×1024 で返すので、Brain の推奨サイズ 1280×670 に中央を切り抜いて縮小する。
 最後に、書き手のアイコン（アカウントの画像）を右下に丸く合成する（ChatGPTに描かせると別人になるため）。
 OPENAI_API_KEY が無い・生成に失敗したときは、今までの HTML のサムネ（images.py）で代わりに作る。
@@ -16,7 +18,9 @@ import urllib.request
 from PIL import Image, ImageDraw
 
 from . import images
-from .config import DATA, ROOT, OPENAI_API_KEY, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_QUALITY, thumbnail_guide
+from .config import (
+    DATA, OPENAI_API_KEY, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_QUALITY, ROOT, THUMBNAIL_MODE, thumbnail_guide,
+)
 
 GEN_SIZE = (1536, 1024)
 ICON_SIZE, ICON_RING, ICON_MARGIN = 190, 8, 28
@@ -58,6 +62,12 @@ def build_prompt(data):
     if design:
         parts += ["", "# 運営者のデザインのルール（最優先で守る）", design]
     return "\n".join(parts)
+
+
+def chatgpt_prompt(data):
+    """ChatGPT の画面にそのまま貼るプロンプト。"""
+    return build_prompt(data).replace(
+        "横長のバナーです。", "画像を1枚生成してください。サイズは横長（3:2、1536×1024）。正方形にはしないでください。", 1)
 
 
 def _request(prompt):
@@ -147,14 +157,17 @@ def add_icon(thumb_path, icon_path):
 
 
 async def make(draft_id, data, icon=None):
-    """サムネを作って保存する。(作り方, エラー) を返す。作り方は "chatgpt" か "html"。
+    """サムネを作って保存する。(作り方, エラー) を返す。
 
+    作り方は "pending"（ChatGPTの画像待ち。今は仮のサムネ）/ "chatgpt"（APIで作った）/ "html"（APIで作れず仮のサムネ）。
     icon はアイコン画像のパス（あれば右下に合成する）。
     """
     path = images.draft_dir(draft_id) / "thumbnail.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     how, error = "html", None
-    if OPENAI_API_KEY:
+    if THUMBNAIL_MODE != "api":
+        how = "pending"
+    elif OPENAI_API_KEY:
         try:
             raw = await asyncio.to_thread(_request, build_prompt(data))
             path.write_bytes(fit(raw))
@@ -163,12 +176,26 @@ async def make(draft_id, data, icon=None):
             error = str(e)
     else:
         error = "OPENAI_API_KEY が未設定です"
-    if how == "html":
+    if how in ("html", "pending"):
         await images.render_thumbnail(path, data)
     path.with_name("thumbnail_raw.png").write_bytes(path.read_bytes())  # アイコンを付ける前（アカウントを変えたとき用）
     if icon:
         add_icon(path, icon)
     return how, error
+
+
+def use_uploaded(draft_id, raw, icon=None):
+    """ChatGPT で作って送られてきた画像を、Brain のサイズに整えてサムネにする。"""
+    path = images.draft_dir(draft_id) / "thumbnail.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fitted = fit(raw)
+    except Exception as e:  # noqa: BLE001 - 画像でないファイルなど
+        raise ThumbnailError(f"画像として読めませんでした: {e}")
+    path.with_name("thumbnail_raw.png").write_bytes(fitted)
+    path.write_bytes(fitted)
+    if icon:
+        add_icon(path, icon)
 
 
 def apply_icon(draft_id, icon):

@@ -52,6 +52,11 @@ def preview_html(data, imgs):
     )
 
 
+def _is_image(att):
+    return (att.content_type or "").startswith("image/") or att.filename.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".webp"))
+
+
 def format_issues(issues):
     if not issues:
         return "✅ 問題なし"
@@ -72,7 +77,12 @@ def draft_embed(draft_id, data, issues, status="承認待ち"):
     e.add_field(name="アカウント", value=account["name"], inline=False)
     e.add_field(name="販売設定", value=f"{price_plan(data['price'])}\n{data['category']}{sub}", inline=False)
     by = data.get("thumbnail_by")
-    if by == "chatgpt":
+    if by == "pending":
+        e.add_field(name="サムネ", value="⏳ 仮のサムネです。下のプロンプトをChatGPTに貼って画像を作り、この下書きに返信で送ってください",
+                    inline=False)
+    elif by == "uploaded":
+        e.add_field(name="サムネ", value="ChatGPTで作った画像を登録済み（作り直すときは新しい画像を返信で送る）", inline=False)
+    elif by == "chatgpt":
         e.add_field(name="サムネ", value="ChatGPTで作成（文字の誤りがあれば [サムネ作り直し]）", inline=False)
     elif by == "html":
         e.add_field(name="サムネ", value=f"⚠️ ChatGPTで作れず、仮のサムネです: {data.get('thumbnail_error') or ''}"[:1000],
@@ -138,7 +148,7 @@ class SalesModal(discord.ui.Modal, title="販売設定"):
                                     category=str(self.category).strip(), subcategory=str(self.subcategory).strip())
 
 
-class ThumbnailModal(discord.ui.Modal, title="サムネ作り直し"):
+class ThumbnailModal(discord.ui.Modal, title="サムネの文字を直す"):
     def __init__(self, bot, draft):
         super().__init__()
         self.bot, self.draft_id = bot, draft["id"]
@@ -153,7 +163,7 @@ class ThumbnailModal(discord.ui.Modal, title="サムネ作り直し"):
             self.add_item(item)
 
     async def on_submit(self, interaction):
-        await interaction.response.send_message(f"🎨 下書き #{self.draft_id} のサムネを作り直しています（1〜2分）")
+        await interaction.response.send_message(f"🎨 下書き #{self.draft_id} のサムネの文字を直しています")
         await self.bot.remake_thumbnail(self.draft_id, interaction.channel, catch=str(self.catch).strip(),
                                         sub=str(self.sub).strip(), visual=str(self.visual).strip())
 
@@ -198,7 +208,7 @@ class DraftView(discord.ui.View):
             return await interaction.response.send_message("この下書きは処理済みです", ephemeral=True)
         await interaction.response.send_modal(SalesModal(self.bot, draft))
 
-    @discord.ui.button(label="サムネ作り直し", style=discord.ButtonStyle.secondary, custom_id="draft:thumbnail")
+    @discord.ui.button(label="サムネの文字を直す", style=discord.ButtonStyle.secondary, custom_id="draft:thumbnail")
     async def remake_thumb(self, interaction, button):
         draft = self._draft(interaction)
         if not draft:
@@ -306,6 +316,12 @@ class BrainBot(discord.Client):
             except Exception as e:  # noqa: BLE001 - 材料の保存失敗でBotを落とさない
                 log.exception("material save failed")
                 return await message.reply(f"⚠️ 材料を保存できませんでした: {e}")
+        if message.channel.id == DRAFT_CHANNEL_ID and any(_is_image(a) for a in message.attachments):
+            try:
+                return await self.on_thumbnail_upload(message)
+            except Exception as e:  # noqa: BLE001 - 画像の登録失敗でBotを落とさない
+                log.exception("thumbnail upload failed")
+                return await message.reply(f"⚠️ サムネにできませんでした: {e}")
         if not SECRETARY_CHANNEL_ID:
             return
         if message.channel.id != SECRETARY_CHANNEL_ID or not message.content.strip():
@@ -442,6 +458,7 @@ class BrainBot(discord.Client):
         )
         storage.update_draft(draft_id, message_id=msg.id)
         await note.delete()
+        await self.send_thumb_prompt(draft_id, data, msg)
         if material:
             thread = self.get_channel(material["thread_id"])
             if thread:
@@ -472,6 +489,8 @@ class BrainBot(discord.Client):
             embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
+        if data.get("thumbnail") != draft["data"].get("thumbnail"):
+            await self.send_thumb_prompt(draft_id, data, msg)
 
     async def remake_thumbnail(self, draft_id, channel, **fields):
         draft = storage.get_draft(draft_id)
@@ -484,10 +503,65 @@ class BrainBot(discord.Client):
         old = await channel.fetch_message(draft["message_id"])
         await old.edit(view=None)
         msg = await channel.send(
-            content="🎨 サムネを作り直しました",
+            content="🎨 サムネの文字を直しました",
             embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
+        await self.send_thumb_prompt(draft_id, data, msg)
+
+    async def send_thumb_prompt(self, draft_id, data, draft_msg):
+        """ChatGPT にそのまま貼るプロンプトを、下書きの下に出す（手動モードのときだけ）。"""
+        if data.get("thumbnail_by") != "pending":
+            return
+        text = thumbnail.chatgpt_prompt(data)
+        head = await draft_msg.reply(
+            f"🎨 下書き #{draft_id} のサムネ用プロンプトです。\n"
+            "① 下のメッセージを長押し（PCは選択）してコピー → ② ChatGPT に貼って画像を作る → "
+            "③ できた画像を保存して、**この下書きかこのメッセージに返信で送る**（Botがサムネにします）"
+        )
+        storage.set_setting(f"thumbprompt:{head.id}", str(draft_id))
+        if len(text) <= 1990:
+            body = await draft_msg.channel.send(text)
+        else:
+            body = await draft_msg.channel.send(
+                "（長いのでファイルにしました。開いて全文をコピーしてください）",
+                file=discord.File(io.BytesIO(text.encode()), filename=f"draft-{draft_id}-chatgpt-prompt.txt"))
+        storage.set_setting(f"thumbprompt:{body.id}", str(draft_id))
+
+    async def on_thumbnail_upload(self, message):
+        """#下書き に送られた画像を、返信先の下書きのサムネにする。"""
+        draft = None
+        ref = message.reference.message_id if message.reference else None
+        if ref:
+            did = storage.get_setting(f"thumbprompt:{ref}")
+            for d in storage.pending_drafts():
+                cand = storage.get_draft(d)
+                if str(d) == did or cand["message_id"] == ref:
+                    draft = cand
+        if not draft:
+            waiting = [storage.get_draft(d) for d in storage.pending_drafts()]
+            waiting = [d for d in waiting if d["data"].get("thumbnail_by") == "pending"]
+            if len(waiting) == 1 and not ref:
+                draft = waiting[0]
+            else:
+                return await message.reply("どの下書きのサムネか分かりませんでした。下書き（またはプロンプト）に**返信**で画像を送ってください")
+        att = next(a for a in message.attachments if _is_image(a))
+        data = dict(draft["data"])
+        thumbnail.use_uploaded(draft["id"], await att.read(), await self.icon(accounts.get(data.get("account"))))
+        data["thumbnail_by"], data["thumbnail_error"] = "uploaded", None
+        issues = checker.check(data)
+        storage.update_draft(draft["id"], data=data, issues=issues)
+        try:
+            old = await message.channel.fetch_message(draft["message_id"])
+            await old.edit(view=None)
+        except discord.HTTPException:
+            pass
+        msg = await message.channel.send(
+            content=f"🖼️ 下書き #{draft['id']} のサムネを登録しました（Brainのサイズに整えて、アイコンを入れています）",
+            embed=draft_embed(draft["id"], data, issues), files=await draft_files(draft["id"], data),
+            view=DraftView(self),
+        )
+        storage.update_draft(draft["id"], message_id=msg.id)
 
     async def icon(self, account):
         """サムネに入れるアイコン。まだ無ければ accounts.json の icon か Brain のプロフィール画像から用意する。"""
