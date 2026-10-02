@@ -2,13 +2,15 @@
 import re
 from html import unescape
 
+from . import materials
+from .config import ACHIEVEMENT_SCALE
+
 # 結果を保証する言い回しだけを止める（「必ず確認しましょう」などは対象外）
 OUTCOME = r"(成功|稼げ|稼ぐ|儲か|収入|収益|月収|年収|万円|売れ|集客でき|伸び|達成|合格|内定)"
 EXAGGERATION = [
     rf"(必ず|絶対(に)?|確実に|間違いなく|誰でも|100[%％])[^。]{{0,10}}{OUTCOME}",
     rf"{OUTCOME}[^。]{{0,6}}(率|確率)[^。]{{0,4}}100[%％]",
     r"(放置|寝てるだけ|ほったらかし)(で|でも)[^。]{0,10}(稼|儲|収入|万円)",
-    r"(月|年)(収|商)?\s*\d[\d,]*\s*万円(を)?(稼|達成|突破)",
     r"業界(No\.?1|ナンバーワン|最大級)",
 ]
 FAKE_EXPERIENCE = [
@@ -92,8 +94,40 @@ def check_paywall(html):
     return issues
 
 
-def check(data):
-    """[(level, message)] を返す。level は error / warn。"""
+YEN = re.compile(r"(\d[\d,，]*(?:\.\d+)?)\s*(億|万)?\s*円")
+
+
+def yen_amounts(text):
+    """文中の金額（円）を数値で返す。「110万円」→ 1100000、「5,000円」→ 5000。"""
+    out = []
+    for num, unit in YEN.findall(text):
+        v = float(num.replace(",", "").replace("，", ""))
+        out.append(int(v * {"億": 100_000_000, "万": 10_000}.get(unit, 1)))
+    return out
+
+
+def check_achievements(data, material_text):
+    """サムネとタイトルの金額が、材料にある金額を控えめにした範囲に収まっているか。"""
+    shown = yen_amounts(data["title"] + "\n" + image_text(data))
+    if not shown:
+        return []
+    source = yen_amounts(material_text or "")
+    if not source:
+        return [("error", f"サムネかタイトルの金額（{', '.join(f'{v:,}円' for v in shown)}）が材料にありません。"
+                          "材料に書いた本当の実績の金額しか使えません")]
+    # 材料のどれかの金額を「控えめにした値」になっているか（きりのよい数字への切り下げは半分まで許す）
+    def scaled_from_source(v):
+        return any(src * ACHIEVEMENT_SCALE * 0.5 <= v <= src * ACHIEVEMENT_SCALE * 1.05 for src in source)
+    over = [v for v in shown if not scaled_from_source(v)]
+    if over:
+        pct = round(ACHIEVEMENT_SCALE * 100)
+        return [("error", f"サムネかタイトルの金額（{', '.join(f'{v:,}円' for v in over)}）が、"
+                          f"材料の実績を{pct}%に控えめにした数字になっていません（材料の金額: {', '.join(f'{v:,}円' for v in source)}）")]
+    return []
+
+
+def check(data, material_text=None):
+    """[(level, message)] を返す。level は error / warn。material_text は材料の文章（金額の確認に使う）。"""
     issues = []
     title, html = data["title"], data["body_html"]
     body = text_of(html)
@@ -134,6 +168,9 @@ def check(data):
         issues.append(("warn", f"想定外のHTMLタグ: {', '.join(sorted(tags))}"))
 
     issues += check_figures(data)
+    if material_text is None and data.get("material_id"):
+        material_text = materials.prompt_text(data["material_id"])[0]
+    issues += check_achievements(data, material_text)
 
     stats = sorted(set(m.group(0) for m in re.finditer(STAT_PATTERN, body + "\n" + pictures)))
     if stats:

@@ -430,7 +430,7 @@ class BrainBot(discord.Client):
             data["material_id"] = material["id"]
         issues = checker.check(data)
         draft_id = storage.create_draft(theme.get("id"), data, issues, material["id"] if material else None)
-        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data, await self.icon(account))
         storage.update_draft(draft_id, data=data)
         if theme.get("id"):
             storage.mark_theme_used(theme["id"])
@@ -458,7 +458,8 @@ class BrainBot(discord.Client):
             if draft["data"].get(k):
                 data[k] = draft["data"][k]
         if data.get("thumbnail") != draft["data"].get("thumbnail"):  # サムネの文字が変わったときだけ描き直す
-            data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+            data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(
+                draft_id, data, await self.icon(accounts.get(data.get("account"))))
         else:
             data["thumbnail_by"], data["thumbnail_error"] = draft["data"].get("thumbnail_by"), draft["data"].get(
                 "thumbnail_error")
@@ -476,7 +477,8 @@ class BrainBot(discord.Client):
         draft = storage.get_draft(draft_id)
         data = dict(draft["data"])
         data["thumbnail"] = {**(data.get("thumbnail") or {}), **fields}
-        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(draft_id, data)
+        data["thumbnail_by"], data["thumbnail_error"] = await thumbnail.make(
+            draft_id, data, await self.icon(accounts.get(data.get("account"))))
         issues = checker.check(data)
         storage.update_draft(draft_id, data=data, issues=issues)
         old = await channel.fetch_message(draft["message_id"])
@@ -486,6 +488,21 @@ class BrainBot(discord.Client):
             embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
         )
         storage.update_draft(draft_id, message_id=msg.id)
+
+    async def icon(self, account):
+        """サムネに入れるアイコン。まだ無ければ accounts.json の icon か Brain のプロフィール画像から用意する。"""
+        try:
+            if thumbnail.icon_file(account) and not account.get("icon"):
+                return thumbnail.icon_file(account)
+            url = None
+            if not account.get("icon"):
+                async with browser_lock:
+                    async with BrainClient(account, headless=True) as bc:
+                        url = (await bc.current_user()).get("image_url")
+            return await thumbnail.ensure_icon(account, url)
+        except Exception:  # noqa: BLE001 - アイコンが用意できなくてもサムネは作る
+            log.exception("icon failed: %s", account["id"])
+            return None
 
     async def material_account(self, material):
         """#材料 の投稿のタグから、出すアカウントを決める。"""
@@ -505,7 +522,8 @@ class BrainBot(discord.Client):
             return await interaction.response.send_message(f"すでに {new['name']} です", ephemeral=True)
         storage.update_draft(draft["id"], data=data)
         await interaction.response.send_message(
-            f"🔁 下書き #{draft['id']} を {new['name']} で出すように変えました（特典も {new['name']} のものになります）")
+            f"🔁 下書き #{draft['id']} を {new['name']} で出すように変えました（特典とサムネのアイコンも {new['name']} のものになります）")
+        thumbnail.apply_icon(draft["id"], await self.icon(new))
         await interaction.message.edit(view=None)
         msg = await interaction.channel.send(
             content=f"🔁 アカウントを {new['name']} に変えた版です",

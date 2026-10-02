@@ -7,7 +7,7 @@ from datetime import datetime
 
 from . import accounts, materials
 from .config import (
-    CLAUDE_CMD, DATA, DEFAULT_CATEGORY, DEFAULT_PRICE, DEFAULT_SUBCATEGORY, JST, PRICE_SCHEDULE, prompt,
+    ACHIEVEMENT_SCALE, CLAUDE_CMD, DATA, DEFAULT_CATEGORY, DEFAULT_PRICE, DEFAULT_SUBCATEGORY, JST, PRICE_SCHEDULE, prompt,
     thumbnail_guide,
 )
 
@@ -90,6 +90,18 @@ def price_text(first_price):
     return f"公開直後は{first_price:,}円、{later}に値上げします。最終価格の{steps[-1][1]:,}円に見合う内容にしてください"
 
 
+def achievement_rule():
+    if ACHIEVEMENT_SCALE >= 1:
+        return "材料にある実績の数字は、材料のとおりに書く（大きくしない）"
+    pct = round(ACHIEVEMENT_SCALE * 100)
+
+    def ex(yen):
+        return f"{int(yen * ACHIEVEMENT_SCALE):,}円"
+    return (f"材料にある実績の数字（売上・収入・時給・月収など、成果を示す金額）は、そのまま書かずに{pct}%に控えめにして使う。"
+            f"きりのよい数字に切り下げる（例: 1ヶ月で2,200,000円→{ex(2200000)}、時給10,000円→{ex(10000)}）。"
+            "費用・価格・期間・件数など、成果ではない数字は材料のとおりに書く。本文・タイトル・サムネ・図のすべてで同じ控えめの数字にそろえる")
+
+
 def _reward_text(account):
     if not accounts.has_reward(account):
         return "（この記事には特典はありません。特典について本文に書かないこと）"
@@ -117,6 +129,7 @@ async def generate(theme, past_titles, material=None, account=None):
         reward=_reward_text(accounts.get(account and account["id"])),
         categories=_categories_text(cats) or f"- {DEFAULT_CATEGORY}",
         thumbnail_guide=thumbnail_guide("文言") or "（まだありません）",
+        achievement_rule=achievement_rule(),
         past_titles="\n".join(f"- {t}" for t in past_titles) or "（なし）",
         year=datetime.now(JST).year,
     )
@@ -133,6 +146,7 @@ async def revise(draft, instruction):
         price=price_text(draft["price"]),
         reward=_reward_text(accounts.get(draft.get("account"))),
         thumbnail_guide=thumbnail_guide("文言") or "（まだありません）",
+        achievement_rule=achievement_rule(),
         draft_json=json.dumps(body, ensure_ascii=False),
     )
     data = _parse_article(await _run_claude(text))

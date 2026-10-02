@@ -46,6 +46,8 @@ def _schedule(text):
 # 価格の自動変更。公開（審査が通った日時）から数えて、何日目に何円にするか
 PRICE_SCHEDULE = _schedule(env("PRICE_SCHEDULE", "0:100,5:1980,7:2980"))
 DEFAULT_PRICE = PRICE_SCHEDULE[0][1]
+# 材料にある実績の数字（売上・収入・時給など）を、記事とサムネでは何倍にして書くか（0.5 = 半分に控えめにする）
+ACHIEVEMENT_SCALE = float(env("ACHIEVEMENT_SCALE", "0.5"))
 # カテゴリーはAIが記事に合わせて選ぶ。選べなかったときの既定値
 DEFAULT_CATEGORY = env("DEFAULT_CATEGORY", "ビジネス")
 DEFAULT_SUBCATEGORY = env("DEFAULT_SUBCATEGORY", "")

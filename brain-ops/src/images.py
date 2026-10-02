@@ -35,6 +35,8 @@ THUMB_CSS = BASE_CSS + """
 .catch { font-weight: 800; font-size: 76px; line-height: 1.35; letter-spacing: .01em; }
 .catch em { font-style: normal; color: #e35500; }
 .sub { font-weight: 700; font-size: 40px; line-height: 1.5; color: #4a5a6a; margin-top: 28px; }
+.badges { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 28px; max-width: 820px; }
+.badge { background: #f96204; color: #fff; font-weight: 800; font-size: 32px; padding: 8px 22px; border-radius: 999px; }
 """
 
 FIG_CSS = BASE_CSS + """
@@ -90,7 +92,10 @@ def thumbnail_html(data):
     label, catch, sub = thumbnail_text(data)
     label_html = f"<div class='label'>{escape(label)}</div>" if label else ""
     sub_html = f"<div class='sub'>{escape(sub)}</div>" if sub else ""
-    return _page(THUMB_CSS, f"{label_html}<div class='catch'>{_catch_html(catch)}</div>{sub_html}")
+    badges = [str(b) for b in (data.get("thumbnail") or {}).get("badges") or [] if str(b).strip()][:5]
+    badges_html = ("<div class='badges'>" + "".join(f"<span class='badge'>{escape(b)}</span>" for b in badges)
+                   + "</div>") if badges else ""
+    return _page(THUMB_CSS, f"{label_html}<div class='catch'>{_catch_html(catch)}</div>{sub_html}{badges_html}")
 
 
 def figure_html(fig):
