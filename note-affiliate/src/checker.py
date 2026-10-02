@@ -69,9 +69,10 @@ def check(data):
     pictures = image_text(data)
     programs = load_programs()
 
-    first_p = re.search(r"<p[^>]*>(.*?)</p>", html, re.S)
-    if not first_p or PR_LINE not in text_of(first_p.group(1)):
-        issues.append(("error", "冒頭にPR表記がありません"))
+    # PR表記は記事の一番下に置く運用（冒頭には置かない）
+    last_p = re.findall(r"<p[^>]*>(.*?)</p>", html, re.S)
+    if not last_p or PR_LINE not in text_of(last_p[-1]):
+        issues.append(("error", "本文の最後にPR表記がありません"))
 
     for pat in EXAGGERATION:
         m = re.search(pat, title + "\n" + body + "\n" + pictures)
