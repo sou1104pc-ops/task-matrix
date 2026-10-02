@@ -31,8 +31,8 @@ class SecretaryError(Exception):
 TOOLS = [
     {
         "name": "get_sales", "kind": "read",
-        "desc": "Brainの売上（累計と、指定日の販売）をアカウントごとに調べる。",
-        "args": {"date": "YYYY-MM-DD（省略時は今日）", "account": "アカウントid（省略すると全アカウント）"},
+        "desc": "Brainの売上をアカウントごとに調べる（前回の記録から売れた部数と金額の目安・全期間の部数・振込前の残高）。",
+        "args": {"account": "アカウントid（省略すると全アカウント）"},
     },
     {
         "name": "list_brain_articles", "kind": "read",
@@ -152,18 +152,19 @@ def _account(args):
 
 async def _tool_get_sales(args, ctx):
     from .bot import fetch_sales  # bot が secretary を読み込むので循環を避ける
-    day = datetime.fromisoformat(args["date"]).date() if args.get("date") else datetime.now(JST).date()
+    day = datetime.now(JST).date()
     targets = [_account(args)] if args.get("account") else accounts.ACCOUNTS
-    out = {"日付": day.isoformat(), "アカウント別": []}
+    out = {"今日": day.isoformat(), "アカウント別": []}
     for account in targets:
         try:
-            total, count, sold = await fetch_sales(day, account)
+            bal, s = await fetch_sales(day, account)
         except Exception as e:  # noqa: BLE001 - 1つのアカウントの失敗で全体を止めない
             out["アカウント別"].append({"アカウント": account["name"], "error": str(e)})
             continue
         out["アカウント別"].append({
-            "アカウント": account["name"], "その日の販売部数": len(sold), "その日の売上": sum(s["amount"] for s in sold),
-            "その日売れた記事": sold[:20], "累計売上": total, "累計部数": count})
+            "アカウント": account["name"], "比べた記録の日付": s["since"] or "なし（初回）",
+            "その日から売れた部数": s["count"], "金額の目安": s["amount"], "売れた記事": s["sold"][:20],
+            "全期間の販売部数": s["total_count"], "振込前の売上残高": bal})
     return out
 
 

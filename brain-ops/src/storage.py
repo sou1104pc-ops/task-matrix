@@ -56,13 +56,14 @@ CREATE TABLE IF NOT EXISTS material_items (
     content TEXT NOT NULL,         -- 本文、またはファイルのパス
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS sales_stats (
+CREATE TABLE IF NOT EXISTS article_sales (
     date TEXT NOT NULL,            -- JSTの日付 YYYY-MM-DD
     account TEXT NOT NULL,         -- アカウントid
-    total_sales INTEGER,           -- 累計売上（その日の記録時点）
-    total_count INTEGER,           -- 累計販売部数
+    article_id TEXT NOT NULL,      -- Brainの記事ID
+    sold_count INTEGER NOT NULL,   -- その時点の販売部数（全期間）
+    price INTEGER,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (date, account)
+    PRIMARY KEY (date, account, article_id)
 );
 """
 
@@ -257,24 +258,32 @@ def set_material_status(material_id, status):
         c.execute("UPDATE materials SET status=? WHERE id=?", (status, material_id))
 
 
-# ---- 売上のスナップショット ----
-def save_sales_stats(date, account, total_sales, total_count):
-    """その日の累計値をアカウントごとに記録する（同じ日に複数回呼ばれたら上書き）。"""
+# ---- 記事ごとの販売部数のスナップショット ----
+def save_article_sales(date, account, rows):
+    """rows は [(記事ID, 販売部数, 価格)]。同じ日に複数回呼ばれたら上書き。"""
     with connect() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO sales_stats (date, account, total_sales, total_count, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (date, account, total_sales, total_count, now()),
+        c.executemany(
+            "INSERT OR REPLACE INTO article_sales (date, account, article_id, sold_count, price, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(date, account, aid, n, p, now()) for aid, n, p in rows],
         )
 
 
-def previous_sales_stats(date, account):
-    """指定日より前で一番新しいスナップショットを返す（差分の計算に使う）。"""
+def previous_article_sales_date(date, account):
     with connect() as c:
-        row = c.execute(
-            "SELECT * FROM sales_stats WHERE date < ? AND account=? ORDER BY date DESC LIMIT 1", (date, account)
-        ).fetchone()
-        return dict(row) if row else None
+        row = c.execute("SELECT MAX(date) AS d FROM article_sales WHERE date < ? AND account=?",
+                        (date, account)).fetchone()
+        return row["d"] if row else None
+
+
+def previous_article_sales(date, account):
+    """指定日より前で一番新しい記録の {記事ID: 販売部数}。記録が無ければ {}。"""
+    d = previous_article_sales_date(date, account)
+    if not d:
+        return {}
+    with connect() as c:
+        return {r["article_id"]: r["sold_count"] for r in c.execute(
+            "SELECT article_id, sold_count FROM article_sales WHERE date=? AND account=?", (d, account))}
 
 
 # ---- 秘書との会話履歴 ----

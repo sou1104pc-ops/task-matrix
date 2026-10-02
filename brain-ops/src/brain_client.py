@@ -19,11 +19,16 @@ Brain の画面は裏で api.brain-market.com を呼んでいるので、画面�
   GET/PATCH /v2/articles/{id}/quick_edit  今の販売設定を読み、価格だけ変えて保存
 """
 import asyncio
+import base64
+import hashlib
 import json
+import os
 import re
 import sys
 from urllib.parse import quote, unquote
 
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from playwright.async_api import async_playwright
 
 from . import accounts, images
@@ -31,6 +36,8 @@ from . import accounts, images
 SITE = "https://brain-market.com"
 API = "https://api.brain-market.com"
 COOKIE = "_brain-market-v2"
+# Brain の画面はこの Cookie の中身を CryptoJS の AES（パスフレーズ方式）で暗号化している。鍵は Brain の画面のコードにある値
+COOKIE_KEY = b"f7ac18a7041f1fe5db9f4bd5bee3a2d8e8b5f4d9"
 PAYWALL = re.compile(r"<p>\s*\[\[PAYWALL\]\]\s*</p>")
 PAY_LINE = "<pay-article-line />"
 VOID_TAGS = {"br", "img", "hr"}
@@ -100,8 +107,39 @@ def brain_blocks(body_html, image_urls, paid_head=(), paid_tail=()):
     return blocks, pay_index
 
 
-def _encode_cookie(value):
-    return quote(json.dumps(value, ensure_ascii=False, separators=(",", ":")), safe="!'()*-._~")
+def _evp_key(salt, size=48):
+    """OpenSSL の EVP_BytesToKey（MD5）で鍵とIVを作る（CryptoJS のパスフレーズ方式と同じ）。"""
+    out, block = b"", b""
+    while len(out) < size:
+        block = hashlib.md5(block + COOKIE_KEY + salt).digest()
+        out += block
+    return out[:32], out[32:48]
+
+
+def decode_cookie(raw):
+    """Cookie の値 → {"isSignedIn", "headers", ...}。読めなければ {}。"""
+    try:
+        data = base64.b64decode(unquote(raw))
+        if not data.startswith(b"Salted__"):
+            return json.loads(unquote(raw))  # 暗号化されていない古い形式
+        key, iv = _evp_key(data[8:16])
+        dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        padded = dec.update(data[16:]) + dec.finalize()
+        unpad = padding.PKCS7(128).unpadder()
+        return json.loads((unpad.update(padded) + unpad.finalize()).decode())
+    except Exception:  # noqa: BLE001 - 壊れた Cookie はログインしていない扱い
+        return {}
+
+
+def encode_cookie(value):
+    """decode_cookie の逆（Brain の画面が書くのと同じ形式にする）。"""
+    salt = os.urandom(8)
+    key, iv = _evp_key(salt)
+    pad = padding.PKCS7(128).padder()
+    plain = pad.update(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + pad.finalize()
+    enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    data = b"Salted__" + salt + enc.update(plain) + enc.finalize()
+    return quote(base64.b64encode(data).decode(), safe="!'()*-._~")
 
 
 # ---------------------------------------------------------------- client
@@ -134,10 +172,7 @@ class BrainClient:
     async def _headers(self):
         if self._auth is None:
             c = await self._cookie()
-            try:
-                v = json.loads(unquote(c["value"])) if c else {}
-            except json.JSONDecodeError:
-                v = {}
+            v = decode_cookie(c["value"]) if c else {}
             h = v.get("headers") or {}
             if not v.get("isSignedIn") or not h.get("access-token"):
                 raise NotLoggedIn(f"Brain（{self.account['name']}）にログインしていません。"
@@ -157,12 +192,11 @@ class BrainClient:
         c = await self._cookie()
         if not c:
             return
-        try:
-            v = json.loads(unquote(c["value"]))
-        except json.JSONDecodeError:
+        v = decode_cookie(c["value"])
+        if not v:
             return
         v["headers"] = dict(self._auth)
-        c["value"] = _encode_cookie(v)
+        c["value"] = encode_cookie(v)
         await self.ctx.add_cookies([c])
 
     async def api(self, method, path, params=None, body=None, multipart=None):
@@ -226,6 +260,20 @@ class BrainClient:
             raise BrainError(f"カテゴリー「{category}」はBrainにありません。使えるもの: {list(cats)}")
         if subcategory and subcategory not in cats[category]:
             raise BrainError(f"「{category}」にサブカテゴリー「{subcategory}」はありません。使えるもの: {cats[category]}")
+
+    async def all_articles(self, max_pages=20):
+        """自分の記事を全部（ページをめくって）返す。"""
+        out, seen = [], set()
+        for page in range(1, max_pages + 1):
+            items = await self.api("GET", "/v2/current/articles", params={"page": page})
+            if isinstance(items, dict):
+                items = items.get("articles") or items.get("items") or []
+            new = [a for a in items or [] if str(a.get("id")) not in seen]
+            if not new:
+                break
+            seen |= {str(a.get("id")) for a in new}
+            out += new
+        return out
 
     async def find_article(self, article_id, max_pages=10):
         """自分の記事一覧から1本探す（公開状態を見るため）。見つからなければ None。"""
@@ -325,11 +373,13 @@ async def _main(cmd, account_id=None):
     elif cmd in ("sales", "articles", "categories", "me"):
         async with BrainClient(account, headless=True) as bc:
             from datetime import datetime
-            fn = {"sales": lambda: bc.sales_histories(datetime.now().strftime("%Y/%m")),
+            fn = {"sales": bc.all_articles,
                   "articles": bc.my_articles, "categories": bc.categories, "me": bc.current_user}[cmd]
             out = await fn()
             if cmd == "sales":
-                out = {"total_sales": await bc.total_sales(), "sales_histories": out}
+                out = {"total_sales": await bc.total_sales(),
+                       "sales_histories": await bc.sales_histories(datetime.now().strftime("%Y/%m")),
+                       "articles": [{k: a.get(k) for k in ("id", "title", "price", "sold_count", "status")} for a in out]}
         print(json.dumps(out, ensure_ascii=False, indent=2)[:6000])
     else:
         print("使い方: python -m src.brain_client [login|test|me|categories|articles|sales] [アカウントid]")

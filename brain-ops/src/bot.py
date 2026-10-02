@@ -568,18 +568,14 @@ class BrainBot(discord.Client):
 
 
 # ---------------------------------------------------------------- report
-def _sign(n):
-    return f"+{n:,}" if n >= 0 else f"{n:,}"
-
-
 async def fetch_sales(day, account=None):
-    """(累計売上, 累計部数, その日の販売リスト) を Brain から取る（アカウント1つぶん）。"""
+    """(売上残高, 前回からの販売のまとめ) を Brain から取る（アカウント1つぶん）。"""
+    account = account or accounts.DEFAULT
     async with browser_lock:
         async with BrainClient(account, headless=True) as bc:
             total_raw = await bc.total_sales()
-            hist_raw = await bc.sales_histories(day.strftime("%Y/%m"))
-    total, count = sales.totals(total_raw)
-    return total, count, sales.sales_on(hist_raw, day)
+            articles = await bc.all_articles()
+    return sales.balance(total_raw), sales.summarize(account["id"], articles, day)
 
 
 async def daily_report():
@@ -600,19 +596,18 @@ async def daily_report():
 
 async def _account_sales_text(account, today):
     try:
-        total, count, todays = await fetch_sales(today, account)
+        bal, s = await fetch_sales(today, account)
     except Exception as ex:  # noqa: BLE001 - 売上が取れなくてもレポートは出す
         log.exception("daily sales failed: %s", account["id"])
         return f"売上を取得できませんでした: {ex}"[:1000]
-    lines = [f"今日: {len(todays)}部 / {sum(s['amount'] for s in todays):,}円"]
-    if total is not None:
-        prev = storage.previous_sales_stats(today.isoformat(), account["id"])
-        storage.save_sales_stats(today.isoformat(), account["id"], total, count)
-        diff = f"（前回 {prev['date']} から {_sign(total - prev['total_sales'])}円）" if prev and prev["total_sales"] is not None else ""
-        lines.append(f"累計: {total:,}円" + (f" / {count:,}部" if count is not None else "") + diff)
+    if s["since"]:
+        lines = [f"{s['since']} から: {s['count']}部 / 約{s['amount']:,}円"]
+        lines += [f"・{x['count']}部 約{x['amount']:,}円 {x['title'][:34]}" for x in s["sold"][:8]]
     else:
-        lines.append("累計: 読み取れませんでした（src/sales.py の項目名を確認）")
-    lines += [f"・{s['amount']:,}円 {s['title'][:36]}" for s in todays[:8]]
+        lines = ["初回の記録です。明日から、前日からの販売部数が出ます"]
+    lines.append(f"全期間の販売: {s['total_count']:,}部")
+    if bal is not None:
+        lines.append(f"振込前の売上残高: {bal:,}円")
     return "\n".join(lines)[:1000]
 
 
