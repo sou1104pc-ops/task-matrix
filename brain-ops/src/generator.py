@@ -8,6 +8,7 @@ from datetime import datetime
 from . import accounts, materials
 from .config import (
     CLAUDE_CMD, DATA, DEFAULT_CATEGORY, DEFAULT_PRICE, DEFAULT_SUBCATEGORY, JST, PRICE_SCHEDULE, prompt,
+    thumbnail_guide,
 )
 
 CATEGORIES_URL = "https://api.brain-market.com/v2/categories"
@@ -115,6 +116,7 @@ async def generate(theme, past_titles, material=None, account=None):
         materials=material_text or "（材料はありません。テーマから一般的に役立つ内容を書いてください）",
         reward=_reward_text(accounts.get(account and account["id"])),
         categories=_categories_text(cats) or f"- {DEFAULT_CATEGORY}",
+        thumbnail_guide=thumbnail_guide("文言") or "（まだありません）",
         past_titles="\n".join(f"- {t}" for t in past_titles) or "（なし）",
         year=datetime.now(JST).year,
     )
@@ -130,6 +132,7 @@ async def revise(draft, instruction):
         instruction=instruction,
         price=price_text(draft["price"]),
         reward=_reward_text(accounts.get(draft.get("account"))),
+        thumbnail_guide=thumbnail_guide("文言") or "（まだありません）",
         draft_json=json.dumps(body, ensure_ascii=False),
     )
     data = _parse_article(await _run_claude(text))

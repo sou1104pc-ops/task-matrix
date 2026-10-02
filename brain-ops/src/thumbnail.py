@@ -15,7 +15,7 @@ import urllib.request
 from PIL import Image
 
 from . import images
-from .config import OPENAI_API_KEY, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_QUALITY
+from .config import OPENAI_API_KEY, OPENAI_IMAGE_MODEL, OPENAI_IMAGE_QUALITY, thumbnail_guide
 
 GEN_SIZE = (1536, 1024)
 ENDPOINT = "https://api.openai.com/v1/images/generations"
@@ -48,6 +48,9 @@ def build_prompt(data):
         "- スマホの一覧で小さく表示されても読めるよう、文字は大きく、背景とのコントラストを強く",
         "- 実在の人物・ロゴ・ブランド名・お金の札束・誇大な煽り文句は描かない",
     ]
+    design = thumbnail_guide("デザイン")
+    if design:
+        parts += ["", "# 運営者のデザインのルール（最優先で守る）", design]
     return "\n".join(parts)
 
 

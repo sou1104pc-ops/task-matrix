@@ -71,5 +71,22 @@ def load_seed_themes():
         return [t for t in csv.DictReader(f) if (t.get("theme") or "").strip()]
 
 
+def thumbnail_guide(section):
+    """config/thumbnail_guide.md の「## 文言」か「## デザイン」の中身。書いていなければ空文字。"""
+    path = ROOT / "config" / "thumbnail_guide.md"
+    if not path.exists():
+        return ""
+    text, out, on = path.read_text(encoding="utf-8"), [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            on = line[3:].strip() == section
+            continue
+        if on:
+            out.append(line)
+    # 書き方の見本の行（「（ここに…）」や中身の無い「- 」）は渡さない
+    body = [l for l in out if l.strip() not in ("", "-") and not l.strip().startswith("（ここに")]
+    return "\n".join(body).strip() if any(not l.lstrip().startswith("#") for l in body) else ""
+
+
 def prompt(name):
     return (ROOT / "prompts" / f"{name}.md").read_text(encoding="utf-8")
