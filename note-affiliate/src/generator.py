@@ -1,10 +1,14 @@
 """Mac mini 上の Claude Code（claude -p）で記事を生成する。"""
 import asyncio
 import json
+import logging
 import re
+import urllib.request
 from datetime import datetime
 
-from .config import CLAUDE_CMD, DATA, DEFAULT_PERSONA, JST, load_programs, prompt
+from .config import CLAUDE_CMD, DATA, DEFAULT_PERSONA, JST, NOTE_USER, load_programs, prompt
+
+log = logging.getLogger("generator")
 
 
 class GenerationError(Exception):
@@ -60,7 +64,34 @@ def _parse_article(text):
     data.setdefault("summary", "")
     data.setdefault("thumbnail", {})
     data.setdefault("figures", [])
+    data.setdefault("main_keyword", "")
+    data.setdefault("search_intent", "")
     return data
+
+
+def _fetch_own_articles(max_pages=5):
+    """このアカウントの公開済み記事 [(タイトル, URL)]。内部リンクと重複テーマの回避に使う。"""
+    out = []
+    for page in range(1, max_pages + 1):
+        url = f"https://note.com/api/v2/creators/{NOTE_USER}/contents?kind=note&page={page}"
+        with urllib.request.urlopen(url, timeout=20) as r:
+            data = json.load(r)["data"]
+        out += [(c["name"], c["noteUrl"]) for c in data.get("contents") or []]
+        if data.get("isLastPage", True):
+            break
+    return out
+
+
+async def own_articles():
+    try:
+        return await asyncio.to_thread(_fetch_own_articles)
+    except Exception:  # noqa: BLE001 - 取れなくても記事は作れる
+        log.exception("own articles fetch failed")
+        return []
+
+
+def _related_text(articles):
+    return "\n".join(f"- {name} … {url}" for name, url in articles[:40]) or "（まだありません）"
 
 
 async def generate(theme, past_titles):
@@ -69,12 +100,17 @@ async def generate(theme, past_titles):
     program_ids = [p for p in (theme.get("programs") or "").split("|") if programs.get(p, {}).get("url")]
     if not program_ids:
         raise GenerationError(f"テーマの案件（{theme.get('programs')}）のA8リンクが config/programs.json に設定されていません")
+    articles = await own_articles()
+    titles = list(dict.fromkeys([name for name, _ in articles] + list(past_titles)))
+    now = datetime.now(JST)
     text = prompt("article").format(
         theme=theme["theme"],
         persona=theme.get("persona") or DEFAULT_PERSONA,
         programs=_programs_text(program_ids),
-        past_titles="\n".join(f"- {t}" for t in past_titles) or "（なし）",
-        year=datetime.now(JST).year,
+        past_titles="\n".join(f"- {t}" for t in titles) or "（なし）",
+        related=_related_text(articles),
+        year=now.year,
+        as_of=f"{now.year}年{now.month}月",
     )
     data = _parse_article(await _run_claude(text))
     data["allowed_programs"] = program_ids
@@ -83,7 +119,7 @@ async def generate(theme, past_titles):
 
 async def revise(draft, instruction):
     allowed = draft.get("allowed_programs", [])
-    body = {k: draft.get(k) for k in ("title", "hashtags", "program_ids", "summary", "thumbnail", "figures", "body_html")}
+    body = {k: draft.get(k) for k in ("title", "main_keyword", "search_intent", "hashtags", "program_ids", "summary", "thumbnail", "figures", "body_html")}
     text = prompt("revise").format(
         instruction=instruction,
         programs=_programs_text(allowed),

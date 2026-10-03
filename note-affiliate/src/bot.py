@@ -55,6 +55,8 @@ def format_issues(issues):
 
 def draft_embed(draft_id, data, issues, status="承認待ち"):
     e = discord.Embed(title=data["title"][:250], description=(data.get("summary") or "")[:1000], color=0x41C9B4)
+    if data.get("main_keyword"):
+        e.add_field(name="狙うキーワード", value=f"{data['main_keyword']}（{data.get('search_intent') or '-'}）", inline=False)
     e.add_field(name="ハッシュタグ", value=" ".join(data.get("hashtags", [])) or "-", inline=False)
     e.add_field(name="自動チェック", value=format_issues(issues), inline=False)
     chars = len(checker.text_of(data["body_html"]))

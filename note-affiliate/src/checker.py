@@ -2,7 +2,7 @@
 import re
 from html import unescape
 
-from .config import load_programs
+from .config import NOTE_USER, load_programs
 
 PR_LINE = "※本記事はアフィリエイト広告（PR）を含みます。"
 
@@ -61,6 +61,29 @@ def check_figures(data):
     return issues
 
 
+def check_seo(data):
+    """検索で見つけてもらうための形のチェック（すべて warn）。"""
+    issues = []
+    title, html = data["title"], data["body_html"]
+    kw = (data.get("main_keyword") or "").strip()
+    if not kw:
+        issues.append(("warn", "メインキーワードが決まっていません"))
+    else:
+        words = kw.split()
+        if not all(w in title for w in words):
+            issues.append(("warn", f"タイトルにメインキーワード「{kw}」が入っていません"))
+        elif title.find(words[0]) > 20:
+            issues.append(("warn", f"メインキーワード「{words[0]}」がタイトルの後ろのほうにあります"))
+    if len(title) > 40:
+        issues.append(("warn", f"タイトルが長めです（{len(title)}字。検索結果で後ろが切れます）"))
+    heads = re.findall(r"<(h2|h3)\b", html)
+    if heads and heads[0] == "h3":
+        issues.append(("warn", "最初の見出しが小見出し（h3）です。大見出し（h2）から始めてください"))
+    if "よくある質問" not in text_of(html):
+        issues.append(("warn", "「よくある質問」の章がありません"))
+    return issues
+
+
 def check(data):
     """[(level, message)] を返す。level は error / warn。"""
     issues = []
@@ -86,12 +109,15 @@ def check(data):
             issues.append(("error", f"口コミ・利用者の声の提示があります（{pat}）"))
 
     allowed_urls = {programs[p]["url"] for p in data.get("allowed_programs", []) if p in programs}
-    links = re.findall(r'href="([^"]+)"', html)
+    own_prefix = f"https://note.com/{NOTE_USER}/n/"  # 自分の過去記事への内部リンクは可
+    links = [unescape(u) for u in re.findall(r'href="([^"]+)"', html)]
     for url in links:
-        if unescape(url) not in allowed_urls:
+        if url not in allowed_urls and not url.startswith(own_prefix):
             issues.append(("error", f"許可されていないリンク: {url[:80]}"))
-    if not links:
+    if not any(url in allowed_urls for url in links):
         issues.append(("error", "案件リンクが1つもありません"))
+
+    issues += check_seo(data)
 
     tags = set(re.findall(r"<\s*([a-zA-Z0-9]+)", html)) - ALLOWED_TAGS
     if tags:
