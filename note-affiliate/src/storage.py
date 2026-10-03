@@ -3,7 +3,7 @@ import json
 import sqlite3
 from datetime import datetime
 
-from .config import DB_PATH, JST, load_seed_themes
+from .config import DB_PATH, JST, load_programs, load_seed_themes
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS themes (
@@ -96,12 +96,18 @@ def add_theme(theme, persona, programs):
 
 
 def next_theme():
-    """未使用のテーマを登録順に1つ返す。使い切ったら一番昔に使ったものを再利用する。"""
+    """未使用のテーマを登録順に1つ返す。使い切ったら一番昔に使ったものを再利用する。
+    A8リンクが設定された案件を1つも持たないテーマは飛ばす（リンク待ちの案件で毎朝失敗しないように）。"""
+    programs = load_programs()
+
+    def usable(row):
+        return any(programs.get(p, {}).get("url") for p in (row["programs"] or "").split("|"))
+
     with connect() as c:
-        row = c.execute("SELECT * FROM themes WHERE used_at IS NULL ORDER BY id LIMIT 1").fetchone()
-        if row is None:
-            row = c.execute("SELECT * FROM themes ORDER BY used_at LIMIT 1").fetchone()
-        return dict(row) if row else None
+        rows = c.execute("SELECT * FROM themes WHERE used_at IS NULL ORDER BY id").fetchall()
+        rows += c.execute("SELECT * FROM themes WHERE used_at IS NOT NULL ORDER BY used_at").fetchall()
+    row = next((r for r in rows if usable(r)), None)
+    return dict(row) if row else None
 
 
 def get_theme(theme_id):
