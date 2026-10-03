@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from . import checker, fix_existing, images, storage
 from .config import (
-    AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, JST, load_programs,
+    AUTO_PUBLISH, CLAUDE_CMD, DAILY_REPORT_TIME, DAILY_TIME, DATA, GENRE, JST, default_program, load_programs,
 )
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
@@ -111,7 +111,7 @@ def _tools_text():
     return "\n".join(lines)
 
 
-SYSTEM = """あなたは「note秘書」です。転職系noteのアフィリエイト運用を手伝う相棒として、
+SYSTEM = """あなたは「note秘書」です。{genre}系noteのアフィリエイト運用を手伝う相棒として、
 Discordで運営者と日本語で会話します。
 
 ## 人柄
@@ -258,7 +258,7 @@ async def _tool_generate_draft(args, ctx):
     theme_name = (args.get("theme") or "").strip()
     theme = None
     if theme_name:
-        programs = (args.get("programs") or "sap_tenshoku").strip()
+        programs = (args.get("programs") or default_program()).strip()
         valid = set(load_programs().keys())
         bad = [p for p in programs.split("|") if p and p not in valid]
         if bad:
@@ -393,7 +393,7 @@ def _parse(text):
 
 
 def _build_prompt(history, user_text, transcript):
-    parts = [SYSTEM.format(tools=_tools_text()), "",
+    parts = [SYSTEM.format(tools=_tools_text(), genre=GENRE), "",
              f"（今は {datetime.now(JST):%Y-%m-%d %H:%M} です）", ""]
     if history:
         parts.append("## これまでの会話")

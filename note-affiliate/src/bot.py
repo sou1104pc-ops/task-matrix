@@ -19,7 +19,7 @@ from discord.ext import tasks
 from . import checker, fix_existing, generator, images, secretary, storage
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID,
-    JST, NOTE_USER, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, load_programs,
+    JST, NOTE_USER, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, default_program, load_programs,
 )
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
@@ -77,7 +77,7 @@ async def draft_files(draft_id, data):
 class ReviseModal(discord.ui.Modal, title="修正依頼"):
     instruction = discord.ui.TextInput(
         label="どう直してほしいか", style=discord.TextStyle.paragraph,
-        placeholder="例：導入をもっと短く。SAP保守担当の悩みに寄せて。", max_length=1000,
+        placeholder="例：導入をもっと短く。読者の悩みにもっと寄せて。", max_length=1000,
     )
 
     def __init__(self, bot, draft_id):
@@ -461,7 +461,7 @@ def register_commands(bot):
         await interaction.response.send_message("了解です。下書きを作ります。", ephemeral=True)
         theme = None
         if テーマ:
-            theme = {"theme": テーマ, "persona": "", "programs": 案件.value if 案件 else "sap_tenshoku"}
+            theme = {"theme": テーマ, "persona": "", "programs": 案件.value if 案件 else default_program()}
         try:
             await bot.make_draft(theme)
         except Exception as e:  # noqa: BLE001
@@ -469,7 +469,7 @@ def register_commands(bot):
             await interaction.followup.send(f"⚠️ 生成でエラーが起きました: {e}")
 
     @bot.tree.command(name="テーマ追加", description="記事テーマをリストに追加する")
-    @app_commands.describe(テーマ="例: SAP MMコンサルの年収", 読者="想定読者", 案件="紹介する案件")
+    @app_commands.describe(テーマ="記事のテーマ（例: 〇〇の選び方）", 読者="想定読者", 案件="紹介する案件")
     @app_commands.choices(案件=program_choices)
     async def add_theme_cmd(interaction, テーマ: str, 案件: app_commands.Choice[str], 読者: str = ""):
         ok = storage.add_theme(テーマ, 読者, 案件.value)

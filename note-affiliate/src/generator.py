@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 
-from .config import CLAUDE_CMD, DATA, JST, load_programs, prompt
+from .config import CLAUDE_CMD, DATA, DEFAULT_PERSONA, JST, load_programs, prompt
 
 
 class GenerationError(Exception):
@@ -64,10 +64,14 @@ def _parse_article(text):
 
 
 async def generate(theme, past_titles):
-    program_ids = [p for p in (theme.get("programs") or "").split("|") if p]
+    programs = load_programs()
+    # A8リンクが未設定の案件は使わない（記事に空リンクが入るのを防ぐ）
+    program_ids = [p for p in (theme.get("programs") or "").split("|") if programs.get(p, {}).get("url")]
+    if not program_ids:
+        raise GenerationError(f"テーマの案件（{theme.get('programs')}）のA8リンクが config/programs.json に設定されていません")
     text = prompt("article").format(
         theme=theme["theme"],
-        persona=theme.get("persona") or "転職を考えている人",
+        persona=theme.get("persona") or DEFAULT_PERSONA,
         programs=_programs_text(program_ids),
         past_titles="\n".join(f"- {t}" for t in past_titles) or "（なし）",
         year=datetime.now(JST).year,

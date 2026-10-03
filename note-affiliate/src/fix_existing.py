@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 from html import unescape
 
 from .checker import PR_LINE
-from .config import ROOT
+from .config import ACCOUNT
 
-FIXES = ROOT / "fixes"
+FIXES = ACCOUNT / "fixes"
 
 
 def html_to_text(html):
@@ -134,6 +134,8 @@ def load(key):
 
 
 def load_all():
+    if not (FIXES / "articles.json").exists():  # 修正データの無いアカウント
+        return []
     return [load(k) for k in _articles() if (FIXES / f"{k}.json").exists()]
 
 

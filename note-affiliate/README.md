@@ -156,6 +156,28 @@ launchctl load ~/Library/LaunchAgents/com.note-affiliate.bot.plist
 ```
 ログは `data/bot.log` に出ます。Mac mini はスリープしない設定にしてください（システム設定 → エネルギー）。
 
+## 2つ目のアカウントを動かす（固定費みなおし帖）
+
+プログラムは共通で、アカウントごとのフォルダ `accounts/<名前>/` に設定・データ・案件・テーマ・記事の指示文を置きます。
+環境変数 `ACCOUNT_DIR=accounts/kotei` を付けて起動すると、そのフォルダを使います（付けなければ今までの転職アカウント）。
+
+```
+accounts/kotei/
+  .env                   トークン・チャンネルID・noteユーザー名（.env.example をコピー）
+  config/programs.json   紹介するA8案件（url が空の案件は記事に使われない）
+  config/themes.csv      初期テーマ
+  prompts/article.md     記事の指示文（無いファイルは共通の prompts/ を使う）
+  data/                  DB・noteにログインしたブラウザ・画像・ログ（Gitに入れない）
+```
+
+始める手順：
+1. Discord Developer Portal で **2つ目のBot** を作ってサーバーに招待し、`#固定費-下書き` `#固定費-レポート` `#固定費-秘書` を作る
+2. `accounts/kotei/.env.example` を `.env` にコピーして埋める
+3. `accounts/kotei/config/programs.json` に、提携したA8案件のリンクと特徴を書く
+4. noteにログイン（新しいアカウントで）：`ACCOUNT_DIR=accounts/kotei .venv/bin/python -m src.note_client login`
+5. 試しに起動：`ACCOUNT_DIR=accounts/kotei .venv/bin/python -m src.bot`
+6. 常駐：`launchd/com.note-affiliate.kotei.plist` の YOURNAME を直して `~/Library/LaunchAgents/` に置き、`launchctl load`
+
 ## noteの画面が変わって投稿に失敗したら
 失敗時は `data/screenshots/` に画面が保存されます。`config/note_selectors.json`（ボタンや入力欄の場所）を直せば復旧します。
 Claude Code に「スクリーンショットを見て note_selectors.json を直して」と頼むのが早いです。
