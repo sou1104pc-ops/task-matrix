@@ -10,7 +10,7 @@ from html import escape
 
 from playwright.async_api import async_playwright
 
-from .config import DRAFTS_DIR
+from .config import ACCOUNT, DRAFTS_DIR
 
 THUMB_SIZE = (1280, 670)  # note 推奨サイズ
 FIG_WIDTH = 1080          # スマホで縮小されても読める幅
@@ -35,7 +35,18 @@ THUMB_CSS = BASE_CSS + """
 .catch { font-weight: 800; font-size: 76px; line-height: 1.35; letter-spacing: .01em; }
 .catch em { font-style: normal; color: #139a86; }
 .sub { font-weight: 700; font-size: 40px; line-height: 1.5; color: #4a5a6a; margin-top: 28px; }
+.badge { position: absolute; right: 80px; top: 50%; transform: translateY(-50%); width: 320px; height: 320px;
+         border-radius: 50%; background: #1f3a5f; color: #fff; font-weight: 800; font-size: 44px; line-height: 1.25;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.badge .line { white-space: nowrap; }
+.has-badge .catch, .has-badge .sub { max-width: 760px; }
 """
+
+
+def thumb_css():
+    """アカウントごとの見た目（accounts/<名前>/config/thumbnail.css）があれば共通の見た目に上書きする。"""
+    own = ACCOUNT / "config" / "thumbnail.css"
+    return THUMB_CSS + (own.read_text(encoding="utf-8") if own.exists() else "")
 
 FIG_CSS = BASE_CSS + """
 #card { width: 1080px; padding: 64px 64px 72px; background: #fff; border-top: 16px solid #41c9b4; }
@@ -54,10 +65,10 @@ td.head { background: #e1f5f1; font-weight: 800; }
 """
 
 
-def _page(css, inner):
+def _page(css, inner, cls=""):
     # lang="ja" が無いと auto-phrase（文節での折り返し）が効かない
     return (f"<!doctype html><html lang='ja'><meta charset='utf-8'><style>{css}</style>"
-            f"<body><div id='card'>{inner}</div></body></html>")
+            f"<body><div id='card' class='{cls}'>{inner}</div></body></html>")
 
 
 def _catch_html(text):
@@ -70,7 +81,7 @@ def _catch_html(text):
 
 
 def thumbnail_text(data):
-    """(label, catch, sub) を返す。Claude が別名のキーで返したときや、無いときはタイトルから作る。"""
+    """(label, catch, sub, badge) を返す。Claude が別名のキーで返したときや、無いときはタイトルから作る。"""
     t = data.get("thumbnail") or {}
     label = t.get("label") or ""
     catch = t.get("catch") or t.get("title") or t.get("text") or ""
@@ -79,14 +90,19 @@ def thumbnail_text(data):
         m = re.match(r"【(.+?)】\s*(.+)", data["title"])
         catch = m.group(2) if m else data["title"]
         label = label or (m.group(1) if m else "")
-    return label, catch, sub
+    return label, catch, sub, t.get("badge") or ""
 
 
 def thumbnail_html(data):
-    label, catch, sub = thumbnail_text(data)
+    label, catch, sub, badge = thumbnail_text(data)
     label_html = f"<div class='label'>{escape(label)}</div>" if label else ""
     sub_html = f"<div class='sub'>{escape(sub)}</div>" if sub else ""
-    return _page(THUMB_CSS, f"{label_html}<div class='catch'>{_catch_html(catch)}</div>{sub_html}")
+    badge_html = ""
+    if badge:
+        lines = "".join(f"<div class='line'>{escape(l.strip())}</div>" for l in badge.split("\n") if l.strip())
+        badge_html = f"<div class='badge'>{lines}</div>"
+    inner = f"{label_html}<div class='catch'>{_catch_html(catch)}</div>{sub_html}{badge_html}"
+    return _page(thumb_css(), inner, "has-badge" if badge else "")
 
 
 def figure_html(fig):
@@ -120,10 +136,16 @@ FIT_JS = """
 () => {
   const card = document.getElementById('card');
   const catchEl = card.querySelector('.catch'), sub = card.querySelector('.sub');
-  let size = 76, subSize = 40;
+  // バッジの各行は丸の中に収まるまで小さくする
+  for (const line of card.querySelectorAll('.badge .line')) {
+    let s = parseFloat(getComputedStyle(line).fontSize);
+    while (line.scrollWidth > 250 && s > 24) { s -= 2; line.style.fontSize = s + 'px'; }
+  }
+  let size = parseFloat(getComputedStyle(catchEl).fontSize);
+  let subSize = sub ? parseFloat(getComputedStyle(sub).fontSize) : 0;
   const fits = () => {
     let h = 0;
-    for (const c of card.children) {
+    for (const c of card.querySelectorAll(':scope > .label, :scope > .catch, :scope > .sub')) {
       const cs = getComputedStyle(c);
       h += c.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
     }
