@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kindle-ops.bot</string>
+  <!-- /Users/YOURNAME/task-matrix を実際の場所に書き換える -->
+  <key>WorkingDirectory</key>
+  <string>/Users/YOURNAME/task-matrix/kindle-ops</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOURNAME/task-matrix/kindle-ops/.venv/bin/python</string>
+    <string>-m</string>
+    <string>src.bot</string>
+  </array>
+  <!-- claude コマンドの場所（`which claude` で確認）を PATH に含める -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/YOURNAME/.local/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOURNAME/task-matrix/kindle-ops/data/bot.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOURNAME/task-matrix/kindle-ops/data/bot.log</string>
+</dict>
+</plist>

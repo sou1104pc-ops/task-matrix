@@ -1,0 +1,52 @@
+{
+  "_説明": "KDPの画面の場所の候補。上から順に試して、最初に見つかったものを使う。'label:文字' はその文字のラベルが付いた欄、'role:button:文字' はその文字のボタン、それ以外は CSS セレクター。画面が変わって失敗したら data/screenshots/ の fields-*.txt を見て書き足す。",
+  "urls": {
+    "bookshelf": "https://kdp.amazon.co.jp/ja_JP/bookshelf",
+    "new_ebook": "https://kdp.amazon.co.jp/ja_JP/title-setup/kindle/new/details"
+  },
+  "details": {
+    "language": ["#data-language-native", "select[name='data[language]']", "label:言語"],
+    "language_option": "日本語",
+    "title": ["#data-title", "input[name='data[title]']", "label:本のタイトル"],
+    "title_kana": ["#data-title-pronunciation", "input[name='data[title_pronunciation]']", "label:タイトルの読み", "label:フリガナ"],
+    "subtitle": ["#data-subtitle", "input[name='data[subtitle]']", "label:サブタイトル"],
+    "subtitle_kana": ["#data-subtitle-pronunciation", "input[name='data[subtitle_pronunciation]']", "label:サブタイトルの読み"],
+    "author_last": ["#data-primary-author-last-name", "input[name='data[primary_author][last_name]']"],
+    "author_first": ["#data-primary-author-first-name", "input[name='data[primary_author][first_name]']"],
+    "author_last_kana": ["#data-primary-author-last-name-pronunciation", "input[name='data[primary_author][last_name_pronunciation]']"],
+    "author_first_kana": ["#data-primary-author-first-name-pronunciation", "input[name='data[primary_author][first_name_pronunciation]']"],
+    "author_last_romaji": ["#data-primary-author-last-name-romanized", "input[name='data[primary_author][last_name_romanized]']"],
+    "author_first_romaji": ["#data-primary-author-first-name-romanized", "input[name='data[primary_author][first_name_romanized]']"],
+    "description_textarea": ["#data-description", "textarea[name='data[description]']"],
+    "rights_own": ["#non-public-domain", "input[name='data[is_public_domain]'][value='false']", "label:私は著作権を所有しており"],
+    "adult_no": ["input[name='data[is_adult_content]-radio'][value='false']", "#data-is-adult-content-false"],
+    "keyword_inputs": ["input[id^='data-keywords-']", "input[name^='data[keywords]']"],
+    "categories_button": ["#categories-modal-button", "role:button:カテゴリーを選択", "role:button:カテゴリーを編集", "role:button:Choose categories"],
+    "categories_save": ["#react-aui-modal-footer-0 button", "role:button:カテゴリーを保存", "role:button:Save categories"],
+    "save_continue": ["#save-and-continue-announce", "role:button:保存して続行", "role:button:Save and Continue"]
+  },
+  "content": {
+    "drm_yes": ["input[name='data[is_drm]'][value='true']", "#data-is-drm-true"],
+    "drm_no": ["input[name='data[is_drm]'][value='false']", "#data-is-drm-false"],
+    "manuscript_input": ["#data-assets-interior-file-upload-AjaxInput", "input[type='file'][name*='interior']", "input[type='file']"],
+    "manuscript_done": ["#data-assets-interior-file-upload-success", "text=アップロードが完了しました", "text=正常にアップロードされました", "text=uploaded successfully"],
+    "cover_own": ["#data-cover-choice-accordion [data-a-accordion-row-name='UPLOAD'] a", "label:既にお持ちの表紙", "text=既にお持ちの表紙ファイルをアップロード", "text=Upload a cover you already have"],
+    "cover_input": ["#data-assets-cover-file-upload-AjaxInput", "input[type='file'][name*='cover']"],
+    "cover_done": ["#data-assets-cover-file-upload-success", "text=表紙が正常にアップロードされました", "text=Cover uploaded successfully"],
+    "ai_yes": ["input[name='data[generative_ai][is_ai_generated]'][value='true']", "#data-generative-ai-questionnaire-yes"],
+    "ai_text_level": ["select[name='data[generative_ai][text]']", "#data-generative-ai-text"],
+    "ai_text_tool": ["input[name='data[generative_ai][text_tool]']", "#data-generative-ai-text-tool"],
+    "ai_image_level": ["select[name='data[generative_ai][image]']", "#data-generative-ai-image"],
+    "save_continue": ["#save-and-continue-announce", "role:button:保存して続行", "role:button:Save and Continue"]
+  },
+  "pricing": {
+    "select_checkbox": ["#data-select-enrollment", "input[name='data[select_enrollment]']", "label:KDPセレクトに登録"],
+    "territory_worldwide": ["#data-territory-rights-worldwide", "input[name='data[territory_rights]'][value='WORLD']", "label:全世界"],
+    "royalty_70": ["input[name='data[digital][royalty_rate]'][value='70']", "#data-royalty-70", "label:70%"],
+    "price_jp": ["#data-pricing-print-jp-price-input input", "input[name='data[digital][channels][amazon][JP][price_vat_inclusive]']", "input[data-marketplace='JP']"],
+    "publish": ["#save-and-publish-announce", "role:button:Kindle本を出版", "role:button:Publish Your Kindle eBook"],
+    "save_draft": ["#save-announce", "role:button:下書きとして保存", "role:button:Save as Draft"]
+  },
+  "ai_text_option": "全体",
+  "ai_image_option": "なし"
+}
