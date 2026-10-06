@@ -74,6 +74,8 @@ def check_seo(data):
             issues.append(("warn", f"タイトルにメインキーワード「{kw}」が入っていません"))
         elif title.find(words[0]) > 20:
             issues.append(("warn", f"メインキーワード「{words[0]}」がタイトルの後ろのほうにあります"))
+    if re.search(r"口コミ|評判", title + kw):
+        issues.append(("warn", "タイトルかキーワードに「口コミ」「評判」があります（実際の口コミが無いので中身と食い違います）"))
     if len(title) > 40:
         issues.append(("warn", f"タイトルが長めです（{len(title)}字。検索結果で後ろが切れます）"))
     heads = re.findall(r"<(h2|h3)\b", html)
