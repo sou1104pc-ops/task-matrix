@@ -96,18 +96,49 @@ def add_theme(theme, persona, programs):
 
 
 def next_theme():
-    """未使用のテーマを登録順に1つ返す。使い切ったら一番昔に使ったものを再利用する。
-    A8リンクが設定された案件を1つも持たないテーマは飛ばす（リンク待ちの案件で毎朝失敗しないように）。"""
+    """次に書くテーマを1つ返す。
+
+    同じ案件の記事が続かないよう、案件を順番に回す。テーマのメインの案件（A8リンクが設定された最初の案件）を、
+    programs.json の group（同じ話題のまとまり）と weight（回ってくる多さ）に沿って、
+    「最後に書いてから何本たったか × 重み」が大きいまとまりから選ぶ。
+    未使用が無くなったら、一番昔に使ったテーマを再利用する。
+    A8リンクが設定された案件を1つも持たないテーマは飛ばす（リンク待ちの案件で毎朝失敗しないように）。
+    """
     programs = load_programs()
 
-    def usable(row):
-        return any(programs.get(p, {}).get("url") for p in (row["programs"] or "").split("|"))
+    def main_program(row):
+        return next((p for p in (row["programs"] or "").split("|") if programs.get(p, {}).get("url")), None)
+
+    def group(p):  # 同じ話題の案件（例: 光回線とホームルーター）は1つのまとまりとして回す
+        return programs[p].get("group") or p
 
     with connect() as c:
-        rows = c.execute("SELECT * FROM themes WHERE used_at IS NULL ORDER BY id").fetchall()
-        rows += c.execute("SELECT * FROM themes WHERE used_at IS NOT NULL ORDER BY used_at").fetchall()
-    row = next((r for r in rows if usable(r)), None)
-    return dict(row) if row else None
+        unused = c.execute("SELECT * FROM themes WHERE used_at IS NULL ORDER BY id").fetchall()
+        used = c.execute("SELECT * FROM themes WHERE used_at IS NOT NULL ORDER BY used_at").fetchall()
+    used = [r for r in used if main_program(r)]
+    last_pos = {}   # 案件・まとまり → 最後に使ったのが何本目か
+    last_used = {}  # 案件 → 最後に使った日時
+    for i, r in enumerate(used):
+        p = main_program(r)
+        last_pos[group(p)] = i
+        last_used[p] = r["used_at"]
+    weight = {}  # まとまりの重み（programs.json の weight。大きいほど多く回ってくる）
+    for p, prog in programs.items():
+        weight[group(p)] = max(weight.get(group(p), 0), float(prog.get("weight", 1)))
+
+    candidates = [r for r in unused if main_program(r)]
+    if not candidates:
+        row = used[0] if used else None
+        return dict(row) if row else None
+
+    def key(r):
+        p = main_program(r)
+        g = group(p)
+        # 「最後に書いてから何本たったか × 重み」が大きいまとまりほど先。まだ一度も書いていなければ、全部より前に書いた扱い
+        since = len(used) - last_pos.get(g, -1)
+        return (-since * weight[g], -weight[g], last_used.get(p, ""), r["id"])
+
+    return dict(min(candidates, key=key))
 
 
 def get_theme(theme_id):

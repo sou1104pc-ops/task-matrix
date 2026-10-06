@@ -29,6 +29,18 @@ def _programs_text(program_ids):
 
 
 async def _run_claude(text, timeout=900):
+    """claude -p を実行する。一時的な失敗（利用上限の瞬間・通信エラー）に備えて1回だけ待ってやり直す。"""
+    try:
+        return await _run_claude_once(text, timeout)
+    except GenerationError as e:
+        if "タイムアウト" in str(e):
+            raise
+        log.warning("claude -p failed, retrying in 60s: %s", e)
+        await asyncio.sleep(60)
+        return await _run_claude_once(text, timeout)
+
+
+async def _run_claude_once(text, timeout):
     proc = await asyncio.create_subprocess_exec(
         CLAUDE_CMD, "-p", "--output-format", "json",
         stdin=asyncio.subprocess.PIPE,
@@ -42,9 +54,18 @@ async def _run_claude(text, timeout=900):
         proc.kill()
         raise GenerationError("Claude Code の応答がタイムアウトしました")
     if proc.returncode != 0:
-        raise GenerationError(f"Claude Code がエラー終了しました: {err.decode()[-500:]}")
+        # 理由は stderr ではなく stdout の JSON に入っていることが多い（利用上限・通信エラーなど）
+        reason = err.decode().strip()
+        try:
+            r = json.loads(out.decode())
+            reason = reason or str(r.get("result") or r.get("api_error_status") or "")
+        except ValueError:
+            reason = reason or out.decode().strip()
+        log.error("claude -p failed (exit %s): stderr=%r stdout=%r", proc.returncode, err.decode()[-2000:], out.decode()[-2000:])
+        raise GenerationError(f"Claude Code がエラー終了しました（終了コード {proc.returncode}）: {(reason or '理由不明')[-500:]}")
     result = json.loads(out.decode())
     if result.get("is_error"):
+        log.error("claude -p returned is_error: %r", str(result.get("result"))[-2000:])
         raise GenerationError(f"Claude Code エラー: {result.get('result')}")
     return result["result"]
 
