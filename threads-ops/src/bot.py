@@ -38,6 +38,9 @@ STATUS_COLOR = {
     "failed": 0xE0474C, "rejected": 0x777777, "cancelled": 0x777777,
 }
 WEEKDAY = "月火水木金土日"
+KIND_CHOICES = [app_commands.Choice(name="価値提供", value="value"), app_commands.Choice(name="誘導", value="cta")]
+# URLだけ貼られても中身は読めない（XはログインなしでAPIから本文を取れない）
+X_URL_ONLY = re.compile(r"\s*https?://(?:www\.)?(?:x|twitter)\.com/\S+\s*")
 
 
 # ---------------------------------------------------------------- 表示
@@ -86,11 +89,15 @@ def draft_embed(d):
     else:
         body = "\n\n".join(f"**── {i}/{len(posts)} ──**\n{p}" for i, p in enumerate(posts, 1))
     e = discord.Embed(
-        title=f"{account_name(d['account_id'])}｜{fmt_time(d['scheduled_at'])}｜{KIND_LABEL.get(d['kind'], d['kind'])}",
+        title=f"{account_name(d['account_id'])}｜{fmt_time(d['scheduled_at'])}｜{KIND_LABEL.get(d['kind'], d['kind'])}"
+              + ("・X参考" if d.get("reference") else ""),
         description=body[:4000], color=STATUS_COLOR.get(d["status"], 0x777777),
     )
     if d.get("memo"):
         e.add_field(name="狙い", value=d["memo"][:200], inline=False)
+    if d.get("reference"):
+        ref = d["reference"]
+        e.add_field(name="参考にしたXの投稿", value=(ref[:300] + ("…" if len(ref) > 300 else "")), inline=False)
     e.add_field(name="自動チェック", value=format_issues(d["issues"]), inline=False)
     if d.get("permalink"):
         e.add_field(name="投稿", value=d["permalink"], inline=False)
@@ -175,6 +182,28 @@ class TokenModal(discord.ui.Modal):
             f"✅ {account_name(self.account_id)} を @{t['username']} として接続しました"
             f"（トークン期限 {(t['expires_at'] or '不明')[:10]}、以後は自動で延長します）", ephemeral=True,
         )
+
+
+class XRefModal(discord.ui.Modal):
+    """/x参考 で、参考にするXの投稿を貼ってもらう。"""
+    reference = discord.ui.TextInput(
+        label="参考にするXの投稿（本文をそのまま貼る）", style=discord.TextStyle.paragraph, max_length=4000,
+        placeholder="伸びているXの投稿の本文をコピーして貼ってください。URLだけでは中身を読めません",
+    )
+    note = discord.ui.TextInput(
+        label="補足（任意）", style=discord.TextStyle.paragraph, required=False, max_length=500,
+        placeholder="例：1行目の引き方だけ真似したい。ネタは朝の時間術に置き換えて",
+    )
+
+    def __init__(self, bot, account_id, kind, when):
+        super().__init__(title=f"{account_name(account_id)}｜Xの投稿を参考に作る"[:45])
+        self.bot, self.account_id, self.kind, self.when = bot, account_id, kind, when
+
+    async def on_submit(self, interaction):
+        await interaction.response.send_message("🧠 Xの投稿を参考に下書きを作っています（1〜2分）…", ephemeral=True)
+        msg = await self.bot.generate_from_x(self.account_id, str(self.reference), self.kind, self.when,
+                                             str(self.note) or None)
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 class ManualPostModal(discord.ui.Modal):
@@ -385,6 +414,7 @@ class ThreadsBot(discord.Client):
         if not slots:
             return 0
         self.channel_for(account_id)  # 出し先が無いまま下書きだけDBに残らないよう、生成前に確かめる
+        slots = self.assign_genres(account_id, a, slots)
         recent_all = storage.recent_texts(limit=60)
         own = [r for r in recent_all if r[0] == account_id][:20]
         others = [r for r in recent_all if r[0] != account_id][:20]
@@ -397,6 +427,17 @@ class ThreadsBot(discord.Client):
             await self.post_draft_message(did)
             made += 1
         return made
+
+    @staticmethod
+    def assign_genres(account_id, a, slots):
+        """genres があれば、投稿枠に「ネタの種類」を順番に割り当てる（前回の続きから回す）。"""
+        genres = a.get("genres") or []
+        if not genres:
+            return slots
+        start = int(storage.get_setting(f"genre_next:{account_id}", "0"))
+        out = [dict(s, genre=genres[(start + i) % len(genres)]) for i, s in enumerate(slots)]
+        storage.set_setting(f"genre_next:{account_id}", str((start + len(slots)) % len(genres)))
+        return out
 
     async def generate_all(self, day, only_future=False, account_ids=None, topic=None, skip_existing=True):
         async with self.generating:
@@ -443,12 +484,12 @@ class ThreadsBot(discord.Client):
         d = storage.get_draft(draft_id)
         a = load_accounts().get(d["account_id"])
         try:
-            posts = await generator.revise(a, d["posts"], d["kind"], instruction)
+            posts = await generator.revise(a, d["posts"], d["kind"], instruction, d.get("reference"))
         except generator.GenerationError as e:
             return f"⚠️ 修正に失敗しました: {e}"
         if storage.get_draft(draft_id)["status"] != "pending":
             return "修正中に下書きの状態が変わったため、反映しませんでした"
-        issues = checker.check(a, posts, storage.recent_texts(limit=60, exclude_id=draft_id))
+        issues = checker.check(a, posts, storage.recent_texts(limit=60, exclude_id=draft_id), d.get("reference"))
         storage.update_draft(draft_id, posts=posts, issues=issues)
         await self.refresh_message(draft_id)
         return f"✏️ #{draft_id} を書き直しました。内容を確認して [承認] してください"
@@ -458,7 +499,7 @@ class ThreadsBot(discord.Client):
         if d["status"] != "pending":
             return "この下書きは既に処理されています"
         a = load_accounts().get(d["account_id"])
-        issues = checker.check(a, posts, storage.recent_texts(limit=60, exclude_id=draft_id))
+        issues = checker.check(a, posts, storage.recent_texts(limit=60, exclude_id=draft_id), d.get("reference"))
         storage.update_draft(draft_id, posts=posts, issues=issues)
         await self.refresh_message(draft_id)
         return f"✏️ #{draft_id} を更新しました" + ("（チェックでエラーがあります）" if checker.has_error(issues) else "")
@@ -476,6 +517,51 @@ class ThreadsBot(discord.Client):
         storage.update_draft(draft_id, scheduled_at=when.isoformat())
         await self.refresh_message(draft_id)
         return f"🕒 #{draft_id} を {fmt_time(when.isoformat())} に変更しました"
+
+    def next_slot(self, account_id, kind):
+        """その種類の投稿枠のうち、15分以上先で一番近い時刻。枠が無ければ明日の21:00。"""
+        a = load_accounts()[account_id]
+        limit = datetime.now(JST) + timedelta(minutes=15)
+        times = [s["time"] for s in a["slots"] if s["type"] == kind] or [s["time"] for s in a["slots"]]
+        today = datetime.now(JST).date()
+        for day in (today, today + timedelta(days=1)):
+            future = sorted(w for w in (parse_when(t, day) for t in times) if w > limit)
+            if future:
+                return future[0]
+        return parse_when("21:00", today + timedelta(days=1))
+
+    async def generate_from_x(self, account_id, reference, kind="value", when=None, note=None):
+        """Xの投稿を参考に下書きを1つ作って #下書き に出す。結果の文を返す（失敗しても例外にしない）。"""
+        reference = (reference or "").strip()
+        if not reference:
+            return "⚠️ 参考にするXの投稿の本文がありません"
+        if X_URL_ONLY.fullmatch(reference):
+            return "⚠️ URLだけでは投稿の中身を読めません。Xの投稿の本文をコピーして貼ってください"
+        a = load_accounts().get(account_id)
+        if not a:
+            return f"⚠️ アカウント {account_id} が accounts.json にありません"
+        if kind not in ("value", "cta"):
+            kind = "value"
+        when = when or self.next_slot(account_id, kind)
+        try:
+            self.channel_for(account_id)
+        except RuntimeError as e:
+            return f"⚠️ {e}"
+        recent_all = storage.recent_texts(limit=60)
+        own = [r for r in recent_all if r[0] == account_id][:20]
+        others = [r for r in recent_all if r[0] != account_id][:20]
+        try:
+            async with self.generating:
+                item = await generator.generate_from_reference(a, reference, kind, own, others, note)
+        except generator.GenerationError as e:
+            return f"⚠️ 下書きを作れませんでした: {e}"
+        when = when + timedelta(minutes=random.randint(0, POST_JITTER_MIN))
+        issues = checker.check(a, item["posts"], storage.recent_texts(limit=60), reference)
+        did = storage.create_draft(account_id, kind, item["posts"], when.isoformat(), issues, item["memo"],
+                                   reference=reference)
+        await self.post_draft_message(did)
+        return (f"📝 #{did} を作りました（{a['name']}｜{fmt_time(when.isoformat())}｜{KIND_LABEL[kind]}）。"
+                "#下書き で内容を確認して [承認] してください")
 
     async def add_manual(self, account_id, posts, when):
         a = load_accounts()[account_id]
@@ -587,6 +673,21 @@ def register_commands(bot):
         await interaction.response.send_message("了解です。下書きを作ります（1アカウント1〜2分）", ephemeral=True)
         await bot.generate_all(day, only_future=is_today, account_ids=[アカウント.value] if アカウント else None,
                                topic=ネタ, skip_existing=False)
+
+    @bot.tree.command(name="x参考", description="Xで伸びている投稿を貼ると、型だけ借りてThreads用の下書きを作る")
+    @app_commands.describe(種類="省略すると価値提供", 日時="省略するとその種類の次の投稿枠（例: 21:00 / 9/30 21:00 / 明日 7:30）")
+    @app_commands.choices(アカウント=choices, 種類=KIND_CHOICES)
+    async def xref_cmd(interaction, アカウント: app_commands.Choice[str],
+                       種類: app_commands.Choice[str] = None, 日時: str = None):
+        when = None
+        if 日時:
+            try:
+                when = parse_when(日時, datetime.now(JST).date())
+            except ValueError as e:
+                return await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            if when < datetime.now(JST):
+                return await interaction.response.send_message("⚠️ その時刻は過ぎています", ephemeral=True)
+        await interaction.response.send_modal(XRefModal(bot, アカウント.value, 種類.value if 種類 else "value", when))
 
     @bot.tree.command(name="予約", description="自分で書いた投稿を予約する")
     @app_commands.describe(日時="21:00 / 9/30 21:00 / 明日 7:30")

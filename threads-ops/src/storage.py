@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS drafts (
     status TEXT NOT NULL,
     posts TEXT NOT NULL,           -- 投稿本文のJSON配列。2つ目以降は1つ目へのリプライとしてつなげる
     memo TEXT,                     -- 生成時の狙いメモ
+    reference TEXT,                -- 参考にしたXの投稿（/x参考 で作ったときだけ）
     issues TEXT,                   -- チェック結果のJSON
     scheduled_at TEXT NOT NULL,    -- 投稿予定（JST ISO）
     message_id INTEGER,
@@ -63,11 +64,26 @@ def now():
     return datetime.now(JST).isoformat(timespec="seconds")
 
 
+_migrated = False
+
+
+def _migrate(conn):
+    """あとから足した列を、既存のDBにも追加する。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(drafts)")}
+    if "reference" not in cols:
+        conn.execute("ALTER TABLE drafts ADD COLUMN reference TEXT")
+        conn.commit()
+
+
 def connect():
+    global _migrated
     DB_PATH.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    if not _migrated:
+        _migrate(conn)
+        _migrated = True
     return conn
 
 
@@ -115,12 +131,12 @@ def _row(row):
     return d
 
 
-def create_draft(account_id, kind, posts, scheduled_at, issues, memo="", status="pending"):
+def create_draft(account_id, kind, posts, scheduled_at, issues, memo="", status="pending", reference=None):
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO drafts (account_id, kind, status, posts, memo, issues, scheduled_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (account_id, kind, status, json.dumps(posts, ensure_ascii=False), memo,
+            "INSERT INTO drafts (account_id, kind, status, posts, memo, reference, issues, scheduled_at,"
+            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (account_id, kind, status, json.dumps(posts, ensure_ascii=False), memo, reference,
              json.dumps(issues, ensure_ascii=False), scheduled_at, now(), now()),
         )
         return cur.lastrowid
@@ -182,10 +198,11 @@ def drafts_by_status(statuses, account_id=None, since=None, limit=100):
 
 
 def has_drafts_for(account_id, date_str):
-    """その日の生成済み下書き（ボツ以外）があるか。同じ日の分を二重に作らないため。"""
+    """その日の生成済み下書き（ボツ以外）があるか。同じ日の分を二重に作らないため。
+    手書き（manual）とXの投稿から作ったもの（reference あり）は、毎晩の生成とは別枠なので数えない。"""
     with connect() as c:
         row = c.execute(
-            "SELECT 1 FROM drafts WHERE account_id=? AND kind!='manual' AND status!='rejected'"
+            "SELECT 1 FROM drafts WHERE account_id=? AND kind!='manual' AND reference IS NULL AND status!='rejected'"
             " AND substr(scheduled_at, 1, 10)=? LIMIT 1",
             (account_id, date_str),
         ).fetchone()

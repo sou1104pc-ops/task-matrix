@@ -108,3 +108,52 @@ def publish_text(user_id, token, text, reply_to=None):
 
 def permalink(media_id, token):
     return _call("GET", f"{VERSION}/{media_id}", {"fields": "permalink", "access_token": token}).get("permalink")
+
+
+# ---------------------------------------------------------------- 読み取り（自分のアカウントのみ）
+def profile(token):
+    return _call("GET", f"{VERSION}/me", {
+        "fields": "id,username,name,threads_biography,threads_profile_picture_url", "access_token": token,
+    })
+
+
+def followers_count(user_id, token):
+    data = _call("GET", f"{VERSION}/{user_id}/threads_insights",
+                 {"metric": "followers_count", "access_token": token}).get("data", [])
+    for d in data:
+        if d.get("name") == "followers_count":
+            return (d.get("total_value") or {}).get("value")
+    return None
+
+
+def user_posts(user_id, token, limit=20):
+    """自分の投稿を新しい順に最大 limit 件（Botを使う前の投稿も含む）。"""
+    posts, params = [], {
+        "fields": "id,text,timestamp,permalink,media_type,is_quote_post",
+        "limit": min(limit, 100), "access_token": token,
+    }
+    path = f"{VERSION}/{user_id}/threads"
+    while len(posts) < limit:
+        page = _call("GET", path, params)
+        posts += page.get("data", [])
+        after = (page.get("paging") or {}).get("cursors", {}).get("after")
+        if not after or not page.get("data") or not (page.get("paging") or {}).get("next"):
+            break
+        params = dict(params, after=after)
+    return posts[:limit]
+
+
+INSIGHT_METRICS = ("views", "likes", "replies", "reposts", "quotes", "shares")
+
+
+def media_insights(media_id, token):
+    """投稿1件の反応。{views, likes, replies, reposts, quotes, shares}"""
+    data = _call("GET", f"{VERSION}/{media_id}/insights",
+                 {"metric": ",".join(INSIGHT_METRICS), "access_token": token}).get("data", [])
+    out = {}
+    for d in data:
+        if d.get("total_value"):
+            out[d["name"]] = d["total_value"].get("value")
+        elif d.get("values"):
+            out[d["name"]] = d["values"][0].get("value")
+    return out

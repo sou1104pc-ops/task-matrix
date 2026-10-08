@@ -6,11 +6,12 @@
 流れ: ユーザー発言 → claude -p が {reply, tools} を返す → ツールを実行 → 結果を渡して再度呼ぶ
 （tools が空になるまで最大 MAX_STEPS 回）。
 """
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta
 
-from . import checker, generator, storage
+from . import checker, generator, storage, threads_api
 from .config import DRAFT_TIME, JST, MAX_CHAIN, POST_JITTER_MIN, load_accounts, save_accounts
 
 MAX_STEPS = 5          # ツール実行のループ上限
@@ -21,8 +22,16 @@ CLAUDE_TIMEOUT = 240
 EDITABLE = {
     "name": "Discordでの表示名", "enabled": "true/false。自動生成の対象にするか",
     "theme": "発信テーマ", "target": "ターゲット", "tone": "口調",
-    "product": "最終的に届ける商品・サービス", "cta_url": "誘導先URL（UTAGEの登録経路）",
+    "product": "最終的に届ける商品・サービス",
+    "cta_method": "誘導方法。pinned=固定投稿へ誘導（本文にURLを入れない）/ url=最後の投稿に cta_url を入れる",
+    "cta_url": "誘導先URL（UTAGEの登録経路。cta_method=url のときだけ使う）",
     "cta_text": "誘導の方向性", "topics": "ネタ候補の配列", "rules": "守ること・避けること",
+    "format": "投稿の型（フックの作り方・文字数・改行のリズムなど。生成時に最優先で守る）",
+    "closing": "最後の投稿の終わりに必ず入れる一文の配列（例 [\"固定に全体像まとめてます👇\"]）。自動チェックで抜けを止める",
+    "last_line": "最後の一文を固定したいときの文（例 コメントくれたら診断します）",
+    "end_with_question": "true なら最後の一文を質問にする（自動チェックあり）",
+    "facts": "使ってよい実績・数字の配列（運営者が確かめた事実）。数字はここにあるものだけ使う",
+    "genres": "ネタの種類を順番に回すときの配列（例 [\"失敗談\", \"売れた型\", \"Claude Code時短術\"]）",
     "slots": '投稿枠の配列。例 [{"time": "07:30", "type": "value"}, {"time": "21:00", "type": "cta"}]',
 }
 
@@ -45,6 +54,13 @@ TOOLS = [
      "args": {"draft_id": "下書き番号"}},
     {"name": "list_posted", "kind": "read", "desc": "投稿済みの投稿を見る（URL付き）。",
      "args": {"days": "何日ぶんか（省略時7）", "account_id": "省略可"}},
+    {"name": "get_threads_profile", "kind": "read",
+     "desc": "Threadsから、接続済みアカウントの今のプロフィール（名前・プロフィール文）とフォロワー数を読む。",
+     "args": {"account_id": "対象のid"}},
+    {"name": "get_threads_posts", "kind": "read",
+     "desc": "Threadsから、接続済みアカウントの過去の投稿（このBotを使う前のものも含む）を新しい順に読む。"
+             "閲覧・いいね・返信・リポスト・引用・シェアの数字付き。リポストは除く。運用方針づくりや、伸びた投稿の分析に使う。",
+     "args": {"account_id": "対象のid", "limit": "何件か（省略時20、最大50）"}},
     {"name": "update_account", "kind": "write",
      "desc": "アカウントの運用方針を書き換える。指定した項目だけ上書きする。表示名の変更は /コマンドの選択肢にはBot再起動後に反映。",
      "args": {"account_id": "対象のid", "fields": "書き換える項目の辞書。使える項目: "
@@ -62,6 +78,13 @@ TOOLS = [
      "desc": "下書きを作って #下書き に出す（承認されるまで投稿されない）。1アカウント1〜2分かかる。",
      "args": {"account_id": "省略すると有効な全アカウント", "day": "today か tomorrow（省略時 tomorrow）",
               "topic": "書いてほしいネタ（省略可）"}},
+    {"name": "generate_from_x", "kind": "action",
+     "desc": "運営者が貼ったXの投稿を参考に、型だけ借りたThreadsの下書きを1つ作って #下書き に出す"
+             "（承認されるまで投稿されない）。文面は写さず、ネタはアカウントのテーマに置き換える。1〜2分かかる。",
+     "args": {"account_id": "対象のid", "x_post": "運営者が貼ったXの投稿の本文（省略・要約せず、そのまま渡す）",
+              "kind": "value（価値提供）か cta（誘導）。省略時 value",
+              "when": "「21:00」「9/30 21:00」「明日 7:30」の形（省略するとその種類の次の投稿枠）",
+              "note": "運営者の補足（どこを真似したいか等。省略可）"}},
     {"name": "approve_draft", "kind": "action",
      "desc": "下書きを承認して予約を確定する。予約時刻にThreadsへ投稿される。", "args": {"draft_id": "下書き番号"}},
     {"name": "cancel_scheduled", "kind": "action", "desc": "予約済み（承認済み）の投稿を取り消す。",
@@ -90,7 +113,7 @@ SYSTEM = """あなたは「Threads秘書」です。複数のThreadsアカウン
 ## 人柄
 - 短く、具体的に。前置きや定型の挨拶はいりません
 - 数字や状況は必ずツールで調べてから答えます。推測で言ってはいけません
-- 分からないこと・できないことは正直に言います（例: 投稿ごとの閲覧数などの分析機能はまだありません）
+- 分からないこと・できないことは正直に言います（例: 接続していないアカウントのThreadsは読めません。他人のアカウントや投稿も読めません）
 
 ## 使えるツール
 {tools}
@@ -103,6 +126,8 @@ SYSTEM = """あなたは「Threads秘書」です。複数のThreadsアカウン
 - update_account で運用方針を変えたら、何をどう変えたかを具体的に報告します
 - 実行したら、何をしたかを結果に基づいて報告します。ツールがエラーを返したら正直に伝え、成功したことにしてはいけません
 - アカウントは id（acc01 など）と表示名のどちらで呼ばれても分かるように、必要なら list_accounts で確かめます
+- 運営者がXの投稿を貼って「これをもとに作って」「この型で」と頼んだら generate_from_x を使います。x_post には貼られた本文を
+  そのまま渡してください。アカウントや種類が分からなければ先に聞きます。XのURLだけが貼られたときは、中身を読めないので本文を貼ってもらいます
 
 ## 返答の形式
 必ず次のJSONだけを出力してください。前後に説明文やコードフェンスを付けないこと。
@@ -221,6 +246,11 @@ async def _update_account(args, bot):
         fields["slots"] = _validate_slots(fields["slots"])
     if "enabled" in fields and isinstance(fields["enabled"], str):
         fields["enabled"] = fields["enabled"].lower() == "true"
+    for k in ("closing", "facts", "genres"):
+        if k in fields and isinstance(fields[k], str):
+            fields[k] = [t.strip() for t in re.split(r"[、,\n/]", fields[k]) if t.strip()]
+    if "end_with_question" in fields and isinstance(fields["end_with_question"], str):
+        fields["end_with_question"] = fields["end_with_question"].lower() == "true"
     if "topics" in fields and isinstance(fields["topics"], str):
         fields["topics"] = [t.strip() for t in re.split(r"[、,\n/]", fields["topics"]) if t.strip()]
     accs = load_accounts()
@@ -277,6 +307,21 @@ async def _generate_drafts(args, bot):
             "備考": "#下書き に承認ボタン付きで出しました。承認されるまで投稿されません"}
 
 
+async def _generate_from_x(args, bot):
+    from .bot import parse_when
+    aid = _account_id(args)
+    when = None
+    if args.get("when"):
+        when = parse_when(str(args["when"]), datetime.now(JST).date())
+        if when < datetime.now(JST):
+            raise ValueError("その時刻は過ぎています")
+    msg = await bot.generate_from_x(aid, str(args.get("x_post") or ""), args.get("kind") or "value", when,
+                                    args.get("note"))
+    if msg.startswith("⚠️"):
+        raise ValueError(msg)
+    return {"結果": msg}
+
+
 async def _approve_draft(args, bot):
     d = _draft(args, "pending")
     msg = await bot.approve(d)
@@ -302,12 +347,46 @@ async def _schedule_post(args, bot):
     return {"結果": await bot.add_manual(aid, _posts(args.get("posts")), when)}
 
 
+async def _get_threads_profile(args, bot):
+    aid = _account_id(args)
+    t = storage.get_token(aid)
+    if not t:
+        raise ValueError(f"{aid} はThreadsに未接続です（/接続 で登録してください）")
+    p = await asyncio.to_thread(threads_api.profile, t["token"])
+    try:
+        followers = await asyncio.to_thread(threads_api.followers_count, t["user_id"], t["token"])
+    except threads_api.ThreadsError as e:
+        followers = f"取得できませんでした: {e}"
+    return {"account_id": aid, "ユーザー名": p.get("username"), "名前": p.get("name"),
+            "プロフィール文": p.get("threads_biography"), "フォロワー数": followers}
+
+
+async def _get_threads_posts(args, bot):
+    aid = _account_id(args)
+    t = storage.get_token(aid)
+    if not t:
+        raise ValueError(f"{aid} はThreadsに未接続です（/接続 で登録してください）")
+    limit = max(1, min(int(args.get("limit") or 20), 50))
+    raw = await asyncio.to_thread(threads_api.user_posts, t["user_id"], t["token"], limit * 2)
+    posts = [p for p in raw if p.get("media_type") != "REPOST_FACADE"][:limit]
+    out = []
+    for p in posts:
+        try:
+            stats = await asyncio.to_thread(threads_api.media_insights, p["id"], t["token"])
+        except threads_api.ThreadsError:
+            stats = {}
+        out.append({"日時": p.get("timestamp", "")[:16], "種類": p.get("media_type"), "本文": p.get("text") or "",
+                    "URL": p.get("permalink"), **{k: stats.get(k) for k in threads_api.INSIGHT_METRICS}})
+    return {"account_id": aid, "件数": len(out), "投稿": out}
+
+
 IMPL = {
+    "get_threads_profile": _get_threads_profile, "get_threads_posts": _get_threads_posts,
     "list_accounts": _list_accounts, "get_status": _get_status, "list_queue": _list_queue,
     "get_draft": _get_draft, "list_posted": _list_posted, "update_account": _update_account,
     "edit_draft": _edit_draft, "reschedule": _reschedule, "reject_draft": _reject_draft,
     "set_paused": _set_paused, "revise_draft": _revise_draft, "generate_drafts": _generate_drafts,
-    "approve_draft": _approve_draft, "cancel_scheduled": _cancel_scheduled, "schedule_post": _schedule_post,
+    "generate_from_x": _generate_from_x, "approve_draft": _approve_draft, "cancel_scheduled": _cancel_scheduled, "schedule_post": _schedule_post,
 }
 
 
