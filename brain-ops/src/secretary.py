@@ -40,6 +40,11 @@ TOOLS = [
         "args": {"account": "アカウントid（省略すると1つ目のアカウント）"},
     },
     {
+        "name": "get_list_stats", "kind": "read",
+        "desc": "UTAGE（公式LINE・メール）の【Brain】アカウントごとの読者数・LINE友だち数・ブロック数と、今日の登録経路（どのBrain記事から何人登録したか）を調べる。",
+        "args": {},
+    },
+    {
         "name": "list_materials", "kind": "read",
         "desc": "#材料 に届いた、まだ記事にしていない材料（テーマと件数）を見る。",
         "args": {},
@@ -179,6 +184,13 @@ async def _tool_list_brain_articles(args, ctx):
             out.append({k: a.get(k) for k in ("id", "title", "status", "edit_status", "price", "published_at")
                         if a.get(k) is not None})
     return {"件数": len(items), "記事": out}
+
+
+async def _tool_get_list_stats(args, ctx):
+    from . import utage
+    rows = await utage.collect(datetime.now(JST).date())
+    return {"アカウント": [{"名前": s["name"], "読者数": s["readers"], "LINE友だち": s["line"], "ブロック": s["line_blocked"],
+                          "今日の登録経路": s["routes"][:10]} for s in rows]}
 
 
 async def _tool_list_materials(args, ctx):
@@ -324,6 +336,7 @@ async def _tool_publish_draft(args, ctx):
 IMPL = {
     "get_sales": _tool_get_sales,
     "list_brain_articles": _tool_list_brain_articles,
+    "get_list_stats": _tool_get_list_stats,
     "list_materials": _tool_list_materials,
     "list_themes": _tool_list_themes,
     "list_recent_posts": _tool_list_recent_posts,

@@ -15,11 +15,12 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import accounts, checker, generator, images, materials, pricing, sales, secretary, storage, thumbnail
+from . import accounts, checker, generator, images, materials, pricing, sales, secretary, storage, thumbnail, utage
 from .brain_client import BrainClient, BrainError, NotLoggedIn
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DEFAULT_CATEGORY, DISCORD_TOKEN, DRAFT_CHANNEL_ID,
-    DRAFTS_DIR, GUILD_ID, JST, MATERIAL_CHANNEL_ID, PRICE_SCHEDULE, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID,
+    DRAFTS_DIR, GUILD_ID, JST, LIST_REPORT_CHANNEL_ID, MATERIAL_CHANNEL_ID, PRICE_SCHEDULE, REPORT_CHANNEL_ID,
+    SECRETARY_CHANNEL_ID, UTAGE_API_KEY,
 )
 
 log = logging.getLogger("bot")
@@ -377,6 +378,13 @@ class BrainBot(discord.Client):
         except Exception as e:  # noqa: BLE001 - 1日の失敗で毎日の実行を止めない
             log.exception("daily report failed")
             await self.report_channel().send(f"⚠️ デイリーレポートでエラーが起きました: {e}")
+        if UTAGE_API_KEY:
+            ch = self.get_channel(LIST_REPORT_CHANNEL_ID) or self.report_channel()
+            try:
+                await ch.send(embed=await list_report())
+            except Exception as e:  # noqa: BLE001
+                log.exception("list report failed")
+                await ch.send(f"⚠️ リスト日報でエラーが起きました: {e}")
 
     @daily_report_task.before_loop
     async def _wait_daily_report(self):
@@ -703,6 +711,56 @@ async def _account_sales_text(account, today):
     return "\n".join(lines)[:1000]
 
 
+def _diff(now_v, old):
+    if now_v is None or old is None:
+        return ""
+    d = now_v - old
+    return f"+{d:,}" if d >= 0 else f"{d:,}"
+
+
+async def list_report():
+    """UTAGE の【Brain】アカウントごとの読者数・LINE友だち数・今日の登録経路をまとめる。"""
+    today = datetime.now(JST).date()
+    rows = await utage.collect(today)
+    e = discord.Embed(title=f"📮 Brain → 公式LINE・メール リスト日報（{today:%-m/%-d}）", color=0x06C755)
+    tot = {"readers": 0, "line": 0, "reg": 0, "pv": 0, "d1": None, "d7": None}
+    for s in rows:
+        prev = storage.utage_stats_before(today.isoformat(), s["id"])
+        week = storage.utage_stats_before(today.isoformat(), s["id"], days_back=7)
+        storage.save_utage_stats(today.isoformat(), s)
+        reg, pv = sum(r["registrations"] for r in s["routes"]), sum(r["pv"] for r in s["routes"])
+        tot["readers"] += s["readers"]
+        tot["line"] += s["line"] or 0
+        tot["reg"] += reg
+        tot["pv"] += pv
+        if prev:
+            tot["d1"] = (tot["d1"] or 0) + s["readers"] - prev["readers"]
+        if week:
+            tot["d7"] = (tot["d7"] or 0) + s["readers"] - week["readers"]
+        d1 = _diff(s["readers"], prev and prev["readers"])
+        d7 = _diff(s["readers"], week and week["readers"])
+        head = f"読者 **{s['readers']:,}人**"
+        if d1:
+            head += f"（前日 {d1}" + (f" / 7日 {d7}" if d7 else "") + "）"
+        lines = [head]
+        if s["line"] is not None:
+            ld = _diff(s["line"], prev and prev["line"])
+            lines.append(f"LINE {s['line']:,}人" + (f"（{ld}）" if ld else "")
+                         + (f" ・ブロック {s['line_blocked']:,}" if s["line_blocked"] else ""))
+        lines.append(f"今日の登録 {reg}人 / アクセス {pv}")
+        lines += [f"・{r['registrations']}人（{r['pv']}PV）{r['name'].replace('（Brain）', '')[:38]}" for r in s["routes"][:3]]
+        e.add_field(name=s["name"], value="\n".join(lines)[:1000], inline=False)
+    trend = ""
+    if tot["d1"] is not None:
+        trend = f"（前日 {_diff(tot['d1'], 0)}" + (f" / 7日 {_diff(tot['d7'], 0)}" if tot["d7"] is not None else "") + "）"
+    e.description = (f"合計：読者 **{tot['readers']:,}人**{trend} ・LINE {tot['line']:,}人\n"
+                     f"今日の登録 **{tot['reg']}人**（登録経路のアクセス {tot['pv']}）")
+    if not rows:
+        e.description = f"名前が「{utage.UTAGE_ACCOUNT_PREFIX}」で始まる配信アカウントが見つかりませんでした"
+    e.set_footer(text="前日・7日の増減は、このBotが毎日記録した読者数との差です（記録がたまるまでは出ません）")
+    return e
+
+
 def weekly_report():
     since = (datetime.now(JST) - timedelta(days=7)).isoformat()
     posts = storage.posts_since(since)
@@ -769,6 +827,14 @@ def register_commands(bot):
     async def reset_chat_cmd(interaction):
         n = storage.clear_chat(str(interaction.channel_id))
         await interaction.response.send_message(f"🧹 会話の記憶を消しました（{n}件）", ephemeral=True)
+
+    @bot.tree.command(name="リスト日報", description="UTAGE の【Brain】アカウントの読者数・LINE友だち数・今日の登録を表示する")
+    async def list_report_cmd(interaction):
+        await interaction.response.defer()
+        try:
+            await interaction.followup.send(embed=await list_report())
+        except utage.UtageError as e:
+            await interaction.followup.send(f"⚠️ {e}")
 
     @bot.tree.command(name="日次レポート", description="今日の売上・公開申請を表示する")
     async def daily_report_cmd(interaction):

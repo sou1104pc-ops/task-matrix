@@ -65,6 +65,11 @@ OPENAI_API_KEY = env("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL = env("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_IMAGE_QUALITY = env("OPENAI_IMAGE_QUALITY", "high")
 
+# UTAGE（公式LINE・メール配信）のリスト日報。APIキーは UTAGE の右上メニュー →「API設定」で発行
+UTAGE_API_KEY = env("UTAGE_API_KEY", "")
+UTAGE_ACCOUNT_PREFIX = env("UTAGE_ACCOUNT_PREFIX", "【Brain】")  # この文字で始まる配信アカウントを集計する
+LIST_REPORT_CHANNEL_ID = env_int("LIST_REPORT_CHANNEL_ID")    # 空なら #レポート に送る
+
 DB_PATH = DATA / "brain.db"
 DRAFTS_DIR = DATA / "drafts"
 SCREENSHOTS_DIR = DATA / "screenshots"

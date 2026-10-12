@@ -56,6 +56,18 @@ CREATE TABLE IF NOT EXISTS material_items (
     content TEXT NOT NULL,         -- 本文、またはファイルのパス
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS utage_stats (
+    date TEXT NOT NULL,            -- JSTの日付 YYYY-MM-DD
+    account_id TEXT NOT NULL,      -- UTAGEの配信アカウントID
+    name TEXT,
+    readers INTEGER,               -- 読者数（全シナリオ）
+    line INTEGER,                  -- LINE友だち数
+    line_blocked INTEGER,          -- うちブロック数
+    registrations INTEGER,         -- その日の登録経路の登録数の合計
+    pv INTEGER,                    -- その日の登録経路のアクセス数の合計
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (date, account_id)
+);
 CREATE TABLE IF NOT EXISTS article_sales (
     date TEXT NOT NULL,            -- JSTの日付 YYYY-MM-DD
     account TEXT NOT NULL,         -- アカウントid
@@ -256,6 +268,28 @@ def list_materials(open_only=True, limit=30):
 def set_material_status(material_id, status):
     with connect() as c:
         c.execute("UPDATE materials SET status=? WHERE id=?", (status, material_id))
+
+
+# ---- UTAGE のリスト数 ----
+def save_utage_stats(date, s):
+    with connect() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO utage_stats (date, account_id, name, readers, line, line_blocked, registrations, pv,"
+            " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (date, s["id"], s["name"], s["readers"], s["line"], s["line_blocked"],
+             sum(r["registrations"] for r in s["routes"]), sum(r["pv"] for r in s["routes"]), now()),
+        )
+
+
+def utage_stats_before(date, account_id, days_back=0):
+    """date より前（days_back 日以上前）で一番新しい記録。無ければ None。"""
+    from datetime import date as _d, timedelta
+    limit = (_d.fromisoformat(date) - timedelta(days=days_back)).isoformat() if days_back else date
+    op = "<=" if days_back else "<"
+    with connect() as c:
+        row = c.execute(f"SELECT * FROM utage_stats WHERE account_id=? AND date {op} ? ORDER BY date DESC LIMIT 1",
+                        (account_id, limit)).fetchone()
+        return dict(row) if row else None
 
 
 # ---- 記事ごとの販売部数のスナップショット ----
