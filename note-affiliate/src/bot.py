@@ -12,6 +12,7 @@ import logging
 import urllib.request
 from datetime import datetime, time, timedelta
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -24,6 +25,7 @@ from .config import (
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
 log = logging.getLogger("bot")
+DRAFT_MESSAGE = "📝 今日の下書きです。見出し画像と図は添付の画像、本文は添付のHTMLで確認できます。"
 browser_lock = asyncio.Lock()
 _h, _m = map(int, DAILY_TIME.split(":"))
 DAILY_AT = time(hour=_h, minute=_m, tzinfo=JST)
@@ -162,6 +164,7 @@ class AffiliateBot(discord.Client):
         intents.message_content = bool(SECRETARY_CHANNEL_ID)  # #秘書 を使うときだけ必要
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self._resent = False  # 起動後に1回だけ、届いていない下書きを送り直す
 
     async def setup_hook(self):
         storage.init()
@@ -177,6 +180,9 @@ class AffiliateBot(discord.Client):
 
     async def on_ready(self):
         log.info("ログインしました: %s", self.user)
+        if not self._resent:
+            self._resent = True
+            await self.resend_unsent_drafts()
 
     # ---- 秘書との会話 ----
     async def on_message(self, message):
@@ -286,13 +292,39 @@ class AffiliateBot(discord.Client):
         draft_id = storage.create_draft(theme.get("id"), data, issues)
         if theme.get("id"):
             storage.mark_theme_used(theme["id"])
-        msg = await ch.send(
-            content="📝 今日の下書きです。見出し画像と図は添付の画像、本文は添付のHTMLで確認できます。",
-            embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
-        )
-        storage.update_draft(draft_id, message_id=msg.id)
+        await self.send_draft(ch, draft_id, data, issues, DRAFT_MESSAGE)
         await note.delete()
         return draft_id, None
+
+    async def send_draft(self, channel, draft_id, data, issues, content):
+        """下書きを承認ボタン付きで送る。通信の一時的なエラー（SSLの切断など）は少し待って送り直す。"""
+        for attempt in range(3):
+            try:
+                msg = await channel.send(
+                    content=content, embed=draft_embed(draft_id, data, issues),
+                    files=await draft_files(draft_id, data), view=DraftView(self),
+                )
+                break
+            except (aiohttp.ClientError, OSError, discord.DiscordServerError) as e:
+                if attempt == 2:
+                    raise
+                log.warning("draft #%s send failed (%s), retrying", draft_id, e)
+                await asyncio.sleep(10 * (attempt + 1))
+        storage.update_draft(draft_id, message_id=msg.id)
+        return msg
+
+    async def resend_unsent_drafts(self):
+        """作ったのに Discord に届かなかった下書き（承認待ちでメッセージが無いもの）を送り直す。"""
+        for draft_id in storage.pending_drafts():
+            draft = storage.get_draft(draft_id)
+            if draft["message_id"]:
+                continue
+            try:
+                await self.send_draft(self.draft_channel(), draft_id, draft["data"], draft["issues"],
+                                      "📝 送れていなかった下書きです（通信エラーで届いていませんでした）。")
+                log.info("resent draft #%s", draft_id)
+            except Exception:  # noqa: BLE001 - 次の起動でまた試す
+                log.exception("resend draft #%s failed", draft_id)
 
     async def revise_draft(self, draft_id, instruction, channel):
         draft = storage.get_draft(draft_id)
@@ -304,11 +336,7 @@ class AffiliateBot(discord.Client):
         storage.update_draft(draft_id, data=data, issues=issues)
         old = await channel.fetch_message(draft["message_id"])
         await old.edit(view=None)
-        msg = await channel.send(
-            content=f"✏️ 修正版です（指示: {instruction[:100]}）",
-            embed=draft_embed(draft_id, data, issues), files=await draft_files(draft_id, data), view=DraftView(self),
-        )
-        storage.update_draft(draft_id, message_id=msg.id)
+        await self.send_draft(channel, draft_id, data, issues, f"✏️ 修正版です（指示: {instruction[:100]}）")
 
     async def publish_draft(self, draft, message, channel):
         data = draft["data"]
