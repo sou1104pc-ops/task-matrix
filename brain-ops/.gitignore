@@ -1,9 +1,12 @@
 .env
 data/*.db
-data/browser-profile/
+data/browser-profile*/
 data/drafts/
 data/screenshots/
 __pycache__/
 .venv/
 data/bot.log
 config/accounts.json
+data/icons/
+data/materials/
+data/*.db-journal
