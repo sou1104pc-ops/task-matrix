@@ -6,6 +6,7 @@ UTAGE の API（https://docs.utage-system.com/）を APIキーで呼ぶ。
 """
 import asyncio
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,22 +14,35 @@ import urllib.request
 from .config import UTAGE_ACCOUNT_PREFIX, UTAGE_API_KEY
 
 API = "https://api.utage-system.com/v1"
+MIN_INTERVAL = 1.05   # UTAGE の制限は 60回/分なので、1秒に1回より少しゆっくり呼ぶ
+_last_call = 0.0
 
 
 class UtageError(Exception):
     pass
 
 
-def _get(path, params=None):
+def _get(path, params=None, retries=5):
+    global _last_call
     if not UTAGE_API_KEY:
         raise UtageError("UTAGE_API_KEY が未設定です（UTAGE の右上メニュー →「API設定」で発行して .env に書く）")
     url = f"{API}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {UTAGE_API_KEY}", "Accept": "application/json"})
+    wait = MIN_INTERVAL - (time.monotonic() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="ignore")[:200]
+        if e.code == 429 and retries > 0:
+            # 制限の解除時刻（X-RateLimit-Reset）まで待ってからやり直す
+            reset = e.headers.get("X-RateLimit-Reset")
+            delay = max(1.0, float(reset) - time.time()) if reset and reset.isdigit() else 30.0
+            time.sleep(min(delay + 1, 120))
+            return _get(path, params, retries - 1)
         if e.code == 401:
             raise UtageError("UTAGE の APIキーが無効です（.env の UTAGE_API_KEY を確認）")
         raise UtageError(f"UTAGE {path} が失敗しました（HTTP {e.code}）: {body}")
