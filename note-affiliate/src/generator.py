@@ -6,7 +6,7 @@ import re
 import urllib.request
 from datetime import datetime
 
-from .config import CLAUDE_CMD, DATA, DEFAULT_PERSONA, JST, NOTE_USER, load_programs, prompt
+from .config import CLAUDE_CMD, DATA, DEFAULT_PERSONA, JST, NOTE_USER, PAID_PRICE, load_programs, prompt
 
 log = logging.getLogger("generator")
 
@@ -138,6 +138,29 @@ async def generate(theme, past_titles):
     return data
 
 
+async def generate_paid(theme_text, past_titles, persona=None):
+    """100円の有料記事（完全攻略）を作る。案件はA8リンクが設定されたもの全部から、無料部分で記事に合うものを選ばせる。"""
+    programs = load_programs()
+    program_ids = [pid for pid, p in programs.items() if p.get("url")]
+    articles = await own_articles()
+    titles = list(dict.fromkeys([name for name, _ in articles] + list(past_titles)))
+    now = datetime.now(JST)
+    text = prompt("paid").format(
+        theme=theme_text,
+        persona=persona or DEFAULT_PERSONA,
+        programs=_programs_text(program_ids),
+        past_titles="\n".join(f"- {t}" for t in titles) or "（なし）",
+        related=_related_text(articles),
+        year=now.year,
+        as_of=f"{now.year}年{now.month}月",
+    )
+    data = _parse_article(await _run_claude(text))
+    data["allowed_programs"] = program_ids
+    data["kind"] = "paid"
+    data["price"] = PAID_PRICE
+    return data
+
+
 async def revise(draft, instruction):
     allowed = draft.get("allowed_programs", [])
     body = {k: draft.get(k) for k in ("title", "main_keyword", "search_intent", "hashtags", "program_ids", "summary", "thumbnail", "figures", "body_html")}
@@ -148,4 +171,7 @@ async def revise(draft, instruction):
     )
     data = _parse_article(await _run_claude(text))
     data["allowed_programs"] = allowed
+    for k in ("kind", "price"):  # 有料記事は修正しても有料のまま
+        if k in draft:
+            data[k] = draft[k]
     return data

@@ -20,18 +20,31 @@ from discord.ext import tasks
 from . import checker, fix_existing, generator, images, secretary, storage
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, DRAFTS_DIR, GUILD_ID,
-    JST, NOTE_USER, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, default_program, load_programs,
+    JST, NOTE_USER, PAID_DEFAULT_THEME, PAID_PRICE, REPORT_CHANNEL_ID, SECRETARY_CHANNEL_ID, default_program,
+    load_programs,
 )
 from .note_client import NoteClient, NoteError, NotLoggedIn
 
 log = logging.getLogger("bot")
+PAID_TODO = ("\n💴 有料記事なので、noteの下書き保存で止めています。上のURLを開いて"
+             "［公開に進む］→ 記事タイプを「有料」・価格を{price}円にして公開してください（有料エリアの線は入れてあります）。")
+
+
+def is_paid(data):
+    return data.get("kind") == "paid"
 DRAFT_MESSAGE = "📝 今日の下書きです。見出し画像と図は添付の画像、本文は添付のHTMLで確認できます。"
+PAID_DRAFT_MESSAGE = ("💴 有料記事（{price}円）の下書きです。添付のHTMLに「ここから有料エリア」の線が入っています。"
+                      "[承認して投稿] を押すと、noteに有料エリア付きで下書き保存します（価格の設定と公開はnoteで行ってください）。")
 browser_lock = asyncio.Lock()
 _h, _m = map(int, DAILY_TIME.split(":"))
 DAILY_AT = time(hour=_h, minute=_m, tzinfo=JST)
 _rh, _rm = map(int, DAILY_REPORT_TIME.split(":"))
 DAILY_REPORT_AT = time(hour=_rh, minute=_rm, tzinfo=JST)
 WEEKLY_AT = time(hour=9, minute=0, tzinfo=JST)
+
+
+PAID_LINE_HTML = ("<p style='margin:32px 0;padding:10px;border:2px dashed #e2553b;color:#e2553b;"
+                  "text-align:center;font-weight:bold'>ここから有料エリア</p>")
 
 
 def preview_html(data, imgs):
@@ -43,7 +56,7 @@ def preview_html(data, imgs):
         "<body style='max-width:720px;margin:auto;font-family:sans-serif;line-height:1.8;padding:16px'>"
         f"<img src='data:image/png;base64,{thumb}' style='width:100%;border-radius:8px'>"
         f"<h1>{data['title']}</h1><p style='color:#888'>{tags}</p>"
-        f"{images.embed_images(data['body_html'], imgs)}</body>"
+        f"{images.embed_images(data['body_html'], imgs).replace('<p>[[PAID]]</p>', PAID_LINE_HTML)}</body>"
     )
 
 
@@ -62,7 +75,8 @@ def draft_embed(draft_id, data, issues, status="承認待ち"):
     e.add_field(name="ハッシュタグ", value=" ".join(data.get("hashtags", [])) or "-", inline=False)
     e.add_field(name="自動チェック", value=format_issues(issues), inline=False)
     chars = len(checker.text_of(data["body_html"]))
-    e.set_footer(text=f"下書き #{draft_id} ・ {chars:,}字 ・ {status}")
+    kind = f" ・ 💴有料{data.get('price', PAID_PRICE)}円" if is_paid(data) else ""
+    e.set_footer(text=f"下書き #{draft_id} ・ {chars:,}字{kind} ・ {status}")
     return e
 
 
@@ -274,17 +288,24 @@ class AffiliateBot(discord.Client):
         await self.wait_until_ready()
 
     # ---- draft lifecycle ----
-    async def make_draft(self, theme=None):
-        """(draft_id, None) か、失敗したら (None, 理由) を返す。"""
+    async def make_draft(self, theme=None, paid_theme=None):
+        """(draft_id, None) か、失敗したら (None, 理由) を返す。paid_theme を渡すと100円の有料記事を作る。"""
         ch = self.draft_channel()
-        theme = theme or storage.next_theme()
-        if not theme:
-            reason = "テーマが登録されていません。/テーマ追加 で追加してください。"
-            await ch.send(reason)
-            return None, reason
-        note = await ch.send(f"🧠 記事を生成中…　テーマ: {theme['theme']}")
+        if paid_theme is None:
+            theme = theme or storage.next_theme()
+            if not theme:
+                reason = "テーマが登録されていません。/テーマ追加 で追加してください。"
+                await ch.send(reason)
+                return None, reason
+        else:
+            theme = {"theme": paid_theme or PAID_DEFAULT_THEME}
+        label = "💴 有料記事を生成中…" if paid_theme is not None else "🧠 記事を生成中…"
+        note = await ch.send(f"{label}　テーマ: {theme['theme']}")
         try:
-            data = await generator.generate(theme, storage.published_titles())
+            if paid_theme is not None:
+                data = await generator.generate_paid(theme["theme"], storage.published_titles())
+            else:
+                data = await generator.generate(theme, storage.published_titles())
         except generator.GenerationError as e:
             await note.edit(content=f"⚠️ 生成に失敗しました: {e}")
             return None, str(e)
@@ -292,7 +313,8 @@ class AffiliateBot(discord.Client):
         draft_id = storage.create_draft(theme.get("id"), data, issues)
         if theme.get("id"):
             storage.mark_theme_used(theme["id"])
-        await self.send_draft(ch, draft_id, data, issues, DRAFT_MESSAGE)
+        content = PAID_DRAFT_MESSAGE.format(price=data["price"]) if is_paid(data) else DRAFT_MESSAGE
+        await self.send_draft(ch, draft_id, data, issues, content)
         await note.delete()
         return draft_id, None
 
@@ -340,22 +362,24 @@ class AffiliateBot(discord.Client):
 
     async def publish_draft(self, draft, message, channel):
         data = draft["data"]
+        paid = is_paid(data)
+        publish = AUTO_PUBLISH and not paid
         async with browser_lock:
             try:
                 imgs = await images.render(draft["id"], data)
                 async with NoteClient() as nc:
-                    url = await nc.create(data["title"], data["body_html"], data["hashtags"], publish=AUTO_PUBLISH,
-                                          thumbnail=imgs["thumbnail"], figures=imgs["figures"])
+                    url = await nc.create(data["title"], data["body_html"], data["hashtags"], publish=publish,
+                                          thumbnail=imgs["thumbnail"], figures=imgs["figures"], paid=paid)
             except NotLoggedIn as e:
                 return await channel.send(f"🔒 {e}")
             except NoteError as e:
                 return await channel.send(f"⚠️ 投稿に失敗しました（もう一度 [承認して投稿] を押せます）: {e}")
-        status = "published" if AUTO_PUBLISH else "saved"
+        status = "published" if publish else "saved"
         storage.update_draft(draft["id"], status=status, note_url=url)
-        label = "投稿済み" if AUTO_PUBLISH else "note下書き保存済み"
+        label = "投稿済み" if publish else "note下書き保存済み"
         await message.edit(embed=draft_embed(draft["id"], data, draft["issues"], label), view=None)
-        await channel.send(f"✅ {label}: {url}")
-        if AUTO_PUBLISH and self.report_channel():
+        await channel.send(f"✅ {label}: {url}" + (PAID_TODO.format(price=data.get("price", PAID_PRICE)) if paid else ""))
+        if publish and self.report_channel():
             await self.report_channel().send(f"📣 今日は「{data['title']}」を投稿しました\n{url}")
 
     # ---- existing articles ----
@@ -496,6 +520,16 @@ def register_commands(bot):
             await bot.make_draft(theme)
         except Exception as e:  # noqa: BLE001
             log.exception("generate failed")
+            await interaction.followup.send(f"⚠️ 生成でエラーが起きました: {e}")
+
+    @bot.tree.command(name="有料記事", description="100円の有料記事（完全攻略）の下書きを1本作る")
+    @app_commands.describe(テーマ=f"省略すると「{PAID_DEFAULT_THEME}」")
+    async def paid_cmd(interaction, テーマ: str = None):
+        await interaction.response.send_message("了解です。有料記事の下書きを作ります（少し時間がかかります）。", ephemeral=True)
+        try:
+            await bot.make_draft(paid_theme=テーマ or "")
+        except Exception as e:  # noqa: BLE001
+            log.exception("paid generate failed")
             await interaction.followup.send(f"⚠️ 生成でエラーが起きました: {e}")
 
     @bot.tree.command(name="テーマ追加", description="記事テーマをリストに追加する")

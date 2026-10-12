@@ -24,10 +24,31 @@ ALLOWED_TAGS = {"h2", "h3", "p", "ul", "ol", "li", "strong", "a", "blockquote", 
 
 
 FIG_MARKER = r"\[\[FIG:([\w-]+)\]\]"
+PAID_MARKER = "[[PAID]]"  # 有料記事の、無料部分と有料部分の境目
 
 
 def text_of(html):
-    return unescape(re.sub(FIG_MARKER, "", re.sub(r"<[^>]+>", "", html)))
+    return unescape(re.sub(FIG_MARKER, "", re.sub(r"<[^>]+>", "", html))).replace(PAID_MARKER, "")
+
+
+def check_paid(data):
+    """有料記事：境目が1つ、リンクは無料部分だけ、PR表記は無料部分の最後（買わない人にも見える位置）。"""
+    html = data["body_html"]
+    n = html.count(PAID_MARKER)
+    if n != 1:
+        return [("error", f"有料部分の境目（[[PAID]]）が{n}個あります（1個にしてください）")]
+    free, paid = html.split(PAID_MARKER)
+    issues = []
+    programs = load_programs()
+    urls = {programs[p]["url"] for p in data.get("allowed_programs", []) if p in programs}
+    if any(unescape(u) in urls for u in re.findall(r'href="([^"]+)"', paid)):
+        issues.append(("error", "有料部分にアフィリエイトのリンクがあります（無料部分だけにしてください）"))
+    free_ps = re.findall(r"<p[^>]*>(.*?)</p>", free, re.S)
+    if not free_ps or PR_LINE not in text_of(free_ps[-1]):
+        issues.append(("error", "無料部分の最後にPR表記がありません（有料部分を買わない人にも見える位置に必要です）"))
+    if len(text_of(paid)) < 6000:
+        issues.append(("warn", f"有料部分が短めです（{len(text_of(paid))}字）"))
+    return issues
 
 
 def image_text(data):
@@ -94,10 +115,13 @@ def check(data):
     pictures = image_text(data)
     programs = load_programs()
 
-    # PR表記は記事の一番下に置く運用（冒頭には置かない）
-    last_p = re.findall(r"<p[^>]*>(.*?)</p>", html, re.S)
-    if not last_p or PR_LINE not in text_of(last_p[-1]):
-        issues.append(("error", "本文の最後にPR表記がありません"))
+    if data.get("kind") == "paid":
+        issues += check_paid(data)
+    else:
+        # PR表記は記事の一番下に置く運用（冒頭には置かない）
+        last_p = re.findall(r"<p[^>]*>(.*?)</p>", html, re.S)
+        if not last_p or PR_LINE not in text_of(last_p[-1]):
+            issues.append(("error", "本文の最後にPR表記がありません"))
 
     for pat in EXAGGERATION:
         m = re.search(pat, title + "\n" + body + "\n" + pictures)

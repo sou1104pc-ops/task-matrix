@@ -38,6 +38,8 @@ CLAUDE_CMD = env("CLAUDE_CMD", "claude")
 AUTO_PUBLISH = env("AUTO_PUBLISH", "true").lower() == "true"
 GENRE = env("ACCOUNT_GENRE", "転職")                       # 秘書の自己紹介などに使う
 DEFAULT_PERSONA = env("DEFAULT_PERSONA", "転職を考えている人")
+PAID_DEFAULT_THEME = env("PAID_DEFAULT_THEME", "転職完全攻略：準備から内定・退職までの進め方")  # /有料記事 でテーマを省略したとき
+PAID_PRICE = int(env("PAID_PRICE", "100"))
 
 DB_PATH = DATA / "affiliate.db"
 BROWSER_PROFILE = DATA / "browser-profile"

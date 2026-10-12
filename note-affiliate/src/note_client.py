@@ -258,6 +258,23 @@ class NoteClient:
         if got < want:
             raise NoteError(f"本文の画像が足りません（{got}/{want}枚）")
 
+    async def _insert_paywall(self):
+        """本文中の [[PAID]] の段落を、note の「有料エリア指定」の線に置き換える。"""
+        body = await self._find("body")
+        handle = await body.element_handle()
+        idx = await self.page.evaluate(FIND_TEXT_JS, [handle, "[[PAID]]", 0])
+        if idx < 0:
+            raise NoteError("本文に有料部分の境目（[[PAID]]）が見つかりません")
+        await self.page.evaluate(SELECT_RANGE_JS, [handle, idx, idx + len("[[PAID]]")])
+        await asyncio.sleep(0.3)
+        await self.page.keyboard.press("Backspace")  # 空の段落にする
+        await asyncio.sleep(0.5)
+        await (await self._find("body_menu")).click()
+        await self.page.get_by_role("button", name="有料エリア指定", exact=True).click()
+        await asyncio.sleep(2)
+        if await self.page.locator(self.sel["paywall_line"][0]).count() != 1:
+            raise NoteError("有料エリアの線を入れられませんでした")
+
     async def _set_hashtags(self, hashtags, clear):
         try:
             inp = await self._find("hashtag_input", timeout=8000)
@@ -319,11 +336,14 @@ class NoteClient:
         except Exception as e:
             raise NoteError(f"note統計の取得に失敗しました: {e}") from e
 
-    async def create(self, title, html, hashtags, publish=True, thumbnail=None, figures=None):
+    async def create(self, title, html, hashtags, publish=True, thumbnail=None, figures=None, paid=False):
         """新規記事を作る。publish=False なら下書き保存で止める。記事URLを返す。
 
         thumbnail は見出し画像のPNG、figures は {図id: PNG}（本文の [[FIG:id]] の位置に入る）。
+        paid=True なら [[PAID]] の位置に有料エリアの線を入れ、必ず下書き保存で止める
+        （価格の設定には note の本人確認が要るため、有料・価格の設定と公開は note の画面で人が行う）。
         """
+        publish = publish and not paid
         try:
             await self.page.goto(self.sel["new_note_url"])
             await self.page.wait_for_load_state("networkidle")
@@ -333,6 +353,8 @@ class NoteClient:
                 await self._set_header_image(thumbnail)
             await self._set_title(title)
             await self._set_body_with_images(html, figures or {})
+            if paid:
+                await self._insert_paywall()
             key = self._key_from_url()
             if not publish:
                 await (await self._find("save_draft")).click()

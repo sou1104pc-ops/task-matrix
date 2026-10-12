@@ -88,6 +88,11 @@ TOOLS = [
         "args": {"theme": "テーマ名（省略するとテーマリストの次のもの）", "programs": "案件id（省略可）"},
     },
     {
+        "name": "generate_paid_draft", "kind": "action",
+        "desc": "100円の有料記事（完全攻略シリーズ）の下書きを1本作り、#下書き に承認ボタン付きで出す。noteにはまだ投稿されない。",
+        "args": {"theme": "テーマ（省略すると既定の完全攻略テーマ）"},
+    },
+    {
         "name": "publish_draft", "kind": "action",
         "desc": "承認待ちの下書きをnoteに投稿する。公開前チェックでエラーがある下書きは投稿できない。",
         "args": {"draft_id": "下書き番号（list_drafts で確認）"},
@@ -123,7 +128,7 @@ Discordで運営者と日本語で会話します。
 {tools}
 
 ## 大事なルール
-- 「noteに反映される」ツール（generate_draft / publish_draft / apply_existing_fix）は、
+- 「noteに反映される」ツール（generate_draft / generate_paid_draft / publish_draft / apply_existing_fix）は、
   ユーザーがはっきりそれを求めたときだけ使います。雑談や質問で勝手に実行してはいけません
 - 実行したら、何をしたかを結果に基づいて報告します
 - ツールがエラーを返したら、そのまま正直に伝えます。成功したことにしてはいけません
@@ -274,6 +279,17 @@ async def _tool_generate_draft(args, ctx):
             "備考": "#下書き チャンネルに承認ボタン付きで出しました。noteにはまだ投稿していません"}
 
 
+async def _tool_generate_paid_draft(args, ctx):
+    try:
+        draft_id, reason = await ctx.make_draft(paid_theme=(args.get("theme") or "").strip())
+    except Exception as e:  # noqa: BLE001 - 失敗も会話で伝える
+        return {"error": f"生成に失敗しました: {e}"}
+    if reason:
+        return {"error": f"生成に失敗しました: {reason}"}
+    return {"作成した": True, "draft_id": draft_id,
+            "備考": "#下書き に出しました。承認するとnoteに有料エリア付きで下書き保存されます。価格の設定と公開はnoteで人が行います"}
+
+
 async def _tool_publish_draft(args, ctx):
     try:
         draft_id = int(args.get("draft_id"))
@@ -289,22 +305,28 @@ async def _tool_publish_draft(args, ctx):
                          "先に #下書き の [修正依頼] で直してください",
                 "チェック結果": [f"{lv}: {msg}" for lv, msg in draft["issues"]]}
     data = draft["data"]
+    paid = data.get("kind") == "paid"
+    publish = AUTO_PUBLISH and not paid  # 有料記事は価格の設定に本人確認が要るので、下書き保存で止める
     async with ctx.browser_lock:
         try:
             async with NoteClient() as nc:
                 imgs = await images.render(draft_id, data)
                 url = await nc.create(data["title"], data["body_html"], data["hashtags"],
-                                      publish=AUTO_PUBLISH, thumbnail=imgs["thumbnail"],
-                                      figures=imgs["figures"])
+                                      publish=publish, thumbnail=imgs["thumbnail"],
+                                      figures=imgs["figures"], paid=paid)
         except NotLoggedIn as e:
             return {"error": f"noteにログインできていません: {e}"}
         except NoteError as e:
             return {"error": f"投稿に失敗しました: {e}"}
-    status = "published" if AUTO_PUBLISH else "saved"
+    status = "published" if publish else "saved"
     storage.update_draft(draft_id, status=status, note_url=url)
     await ctx.mark_draft_done(draft, status)
-    return {"投稿した": True, "URL": url,
-            "状態": "公開済み" if AUTO_PUBLISH else "noteに下書き保存（公開はしていない）"}
+    result = {"投稿した": True, "URL": url,
+              "状態": "公開済み" if publish else "noteに下書き保存（公開はしていない）"}
+    if paid:
+        result["次にやること"] = (f"有料記事なので、URLを開いて［公開に進む］→ 記事タイプを「有料」・価格を"
+                              f"{data.get('price', 100)}円にして公開する（有料エリアの線は入れてある）")
+    return result
 
 
 async def _tool_apply_existing_fix(args, ctx):
@@ -337,6 +359,7 @@ IMPL = {
     "record_conversion": _tool_record_conversion,
     "set_paused": _tool_set_paused,
     "generate_draft": _tool_generate_draft,
+    "generate_paid_draft": _tool_generate_paid_draft,
     "publish_draft": _tool_publish_draft,
     "apply_existing_fix": _tool_apply_existing_fix,
 }
