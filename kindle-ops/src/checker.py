@@ -2,7 +2,7 @@
 import re
 from html import unescape
 
-from .config import AUTHOR, KEYWORD_MAX_CHARS
+from .config import AUTHOR, KEYWORD_MAX_CHARS, LINE_GIFT_TITLE
 
 OUTCOME = r"(成功|稼げ|稼ぐ|儲か|痩せ|治|合格|受か|年収(が|を)?(上|アップ)|上が|お金持ち|月\d+万)"
 EXAGGERATION = [
@@ -114,6 +114,8 @@ def check(data):
     issues += check_title(data)
     issues += check_keywords(data)
     issues += check_description(data)
+    if not LINE_GIFT_TITLE:
+        issues.append(("warn", "公式LINEの特典（.env の LINE_GIFT_TITLE）が未設定のため、本にLINEの案内が入りません"))
     if len([c for c in data.get("categories") or [] if c]) == 0:
         issues.append(("warn", "カテゴリーの候補がありません"))
 

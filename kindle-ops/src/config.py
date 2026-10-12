@@ -46,6 +46,15 @@ KDP_SELECT = env("KDP_SELECT", "true").lower() == "true"
 BOOK_CHARS = env_int("BOOK_CHARS", 25000)
 KEYWORD_MAX_CHARS = env_int("KEYWORD_MAX_CHARS", 50)
 
+# ---- 公式LINE（UTAGE連携）----
+UTAGE_API_KEY = env("UTAGE_API_KEY", "")
+UTAGE_ACCOUNT_ID = env("UTAGE_ACCOUNT_ID", "")
+UTAGE_SCENARIO_ID = env("UTAGE_SCENARIO_ID", "")
+UTAGE_FUNNEL_IDS = [f.strip() for f in env("UTAGE_FUNNEL_IDS", "").split(",") if f.strip()]
+LINE_URL = env("LINE_URL", "")                      # 登録経路を作れなかったときに使う共通の友だち追加URL
+LINE_GIFT_TITLE = env("LINE_GIFT_TITLE", "")        # 特典の名前（全部の本で共通）
+LINE_GIFT_TEXT = env("LINE_GIFT_TEXT", "")          # 特典の説明（1〜3文）
+
 DB_PATH = DATA / "kindle.db"
 BROWSER_PROFILE = DATA / "browser-profile"
 BOOKS_DIR = DATA / "books"

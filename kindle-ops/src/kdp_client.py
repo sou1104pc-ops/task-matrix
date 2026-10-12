@@ -14,6 +14,7 @@ from datetime import datetime
 
 from playwright.async_api import TimeoutError as PlaywrightTimeout, async_playwright
 
+from .epub import description_html
 from .config import (
     AUTHOR, BROWSER_PROFILE, JST, KDP_SELECT, KEYWORD_MAX_CHARS, PRICE_JPY, SCREENSHOTS_DIR, env, load_selectors,
 )
@@ -189,9 +190,10 @@ class KdpClient:
         for k in ("last_kana", "first_kana", "last_romaji", "first_romaji"):
             await self.fill(d, f"author_{k}", AUTHOR[k], required=False)
 
-        how = await self.page.evaluate(SET_DESCRIPTION_JS, _kdp_description(data["description_html"]))
+        desc = _kdp_description(description_html(data))
+        how = await self.page.evaluate(SET_DESCRIPTION_JS, desc)
         if not how:
-            await self.fill(d, "description_textarea", _kdp_description(data["description_html"]))
+            await self.fill(d, "description_textarea", desc)
 
         await self.check(d, "rights_own")
         await self.check(d, "adult_no", required=False)

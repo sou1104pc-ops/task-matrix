@@ -8,7 +8,7 @@ import zipfile
 from datetime import datetime, timezone
 from html import escape
 
-from .config import AUTHOR_NAME, JST
+from .config import AUTHOR_NAME, JST, LINE_GIFT_TEXT, LINE_GIFT_TITLE, LINE_URL
 from .cover import book_dir
 
 CSS = """
@@ -25,6 +25,9 @@ li { margin-bottom: .4em; }
 .colophon { margin-top: 30%; font-size: .9em; }
 .cover { text-align: center; margin: 0; padding: 0; }
 .cover img { max-width: 100%; height: auto; }
+.gift { margin: 2em 0; padding: 1em; border: 2px solid #06c755; border-radius: .5em; }
+.gift .label { font-weight: bold; color: #06c755; margin-bottom: .5em; }
+.gift .button { text-align: center; font-weight: bold; font-size: 1.1em; margin: 1em 0 .5em; }
 """
 
 ALLOWED = {"h2", "h3", "p", "ul", "ol", "li", "b", "br"}
@@ -62,6 +65,51 @@ def _first_h2(html, fallback):
     return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else fallback
 
 
+def line_url(data):
+    """本専用の登録経路URL（出版時に作る）。まだ無ければ共通のURL。"""
+    return (data.get("line") or {}).get("url") or LINE_URL
+
+
+def gift_enabled():
+    return bool(LINE_GIFT_TITLE)
+
+
+def _gift_link(data):
+    url = line_url(data)
+    if not url:  # 下書きの段階で共通URLも無いとき（出版時に本専用のURLが入る）
+        return '<p class="button">［公式LINEの友だち追加URLが入ります］</p>'
+    return f'<p class="button"><a href="{escape(url)}">▶ 公式LINEで特典を受け取る</a></p>'
+
+
+def gift_short(data):
+    """「はじめに」の最後に入れる短い案内（試し読みでも読まれる場所）。"""
+    return (
+        '<div class="gift"><p class="label">読者限定の特典があります</p>'
+        f"<p>この本を手に取ってくれたあなたに、<b>{escape(LINE_GIFT_TITLE)}</b>をお渡ししています。"
+        "受け取り方は本の最後でご案内します。</p></div>"
+    )
+
+
+def gift_page(data):
+    """本の最後に置く特典のページ。"""
+    text = f"<p>{escape(LINE_GIFT_TEXT)}</p>" if LINE_GIFT_TEXT else ""
+    return (
+        "<h2>読者限定特典</h2>"
+        f"<p>最後まで読んでいただき、ありがとうございます。この本を読んでくれたあなたに、<b>{escape(LINE_GIFT_TITLE)}</b>をプレゼントしています。</p>"
+        f'<div class="gift"><p class="label">{escape(LINE_GIFT_TITLE)}</p>{text}{_gift_link(data)}'
+        "<p>公式LINEに友だち追加すると、すぐに受け取れます（無料）。</p></div>"
+        "<p>※特典は予告なく終了することがあります。</p>"
+    )
+
+
+def description_html(data):
+    """KDP に入れる紹介文。特典があるときは最後に1行だけ添える（紹介文にURLは入れられない）。"""
+    html = data.get("description_html") or ""
+    if gift_enabled():
+        html += "<p>※この本には読者限定の特典があります（受け取り方は本の中でご案内しています）。</p>"
+    return html
+
+
 def sections(data):
     """[(ファイル名, 見出し, XHTML本文)]"""
     out = [("intro.xhtml", None, data.get("intro_html") or "")]
@@ -76,7 +124,12 @@ def sections(data):
         html = clean_html(html)
         if not html:
             continue
+        if name == "intro.xhtml" and gift_enabled():
+            html += "\n" + gift_short(data)
         result.append((name, _first_h2(html, title or ""), html))
+    # 特典の案内は Claude の本文とは別に Bot が差し込む（毎回同じ文面・URLを確実に入れるため）
+    if gift_enabled():
+        result.append(("gift.xhtml", "読者限定特典", gift_page(data)))
     return result
 
 

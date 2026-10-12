@@ -15,7 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from . import checker, cover, epub, generator, storage
+from . import checker, cover, epub, generator, storage, utage
 from .config import (
     AUTO_PUBLISH, DAILY_REPORT_TIME, DAILY_TIME, DISCORD_TOKEN, DRAFT_CHANNEL_ID, GUILD_ID, JST, KDP_SELECT,
     PRICE_JPY, REPORT_CHANNEL_ID,
@@ -44,11 +44,11 @@ def preview_html(data, cover_jpg):
         f"<h1>{escape(data['title'])}</h1><p><b>{escape(data.get('subtitle') or '')}</b></p>"
         f"<p style='color:#888'>読み: {escape(data.get('title_kana') or '')} / {escape(data.get('subtitle_kana') or '')}</p>"
         "<h2 style='background:#f1f3f5;padding:8px'>Amazon の紹介文</h2>"
-        f"<div style='border:1px solid #ddd;padding:12px'>{data.get('description_html') or ''}</div>"
+        f"<div style='border:1px solid #ddd;padding:12px'>{epub.description_html(data)}</div>"
         f"<h2 style='background:#f1f3f5;padding:8px'>7つのキーワード</h2><ol>{kws}</ol>"
         f"<h2 style='background:#f1f3f5;padding:8px'>カテゴリー</h2><ul>{cats}</ul>"
         "<h2 style='background:#f1f3f5;padding:8px'>本文</h2>"
-        f"{checker.body_html(data)}</body>"
+        f"{''.join(html for _, _, html in epub.sections(data))}</body>"
     )
 
 
@@ -216,7 +216,7 @@ class KindleBot(discord.Client):
     @tasks.loop(time=DAILY_REPORT_AT)
     async def daily_report_task(self):
         try:
-            await self.report_channel().send(embed=daily_report())
+            await self.report_channel().send(embed=await daily_report())
         except Exception as e:  # noqa: BLE001
             log.exception("daily report failed")
             await self.report_channel().send(f"⚠️ デイリーレポートでエラーが起きました: {e}")
@@ -228,7 +228,7 @@ class KindleBot(discord.Client):
     @tasks.loop(time=WEEKLY_AT)
     async def weekly(self):
         if datetime.now(JST).weekday() == 0:  # 月曜
-            await self.report_channel().send(embed=weekly_report())
+            await self.report_channel().send(embed=await weekly_report())
 
     @weekly.before_loop
     async def _wait_weekly(self):
@@ -308,8 +308,26 @@ class KindleBot(discord.Client):
             return await channel.send(f"⚠️ 表紙の作り直しに失敗しました: {e}")
         await self._replace(book_id, data, channel, f"🎨 表紙を作り直しました（指示: {instruction[:100] or 'おまかせ'}）")
 
+    async def attach_line(self, book):
+        """本専用の LINE 登録経路を UTAGE に作って本のデータに入れる（作り直さない）。失敗したら共通URLのまま進める。"""
+        data = book["data"]
+        if not epub.gift_enabled() or (data.get("line") or {}).get("url") or not utage.enabled():
+            return None
+        try:
+            data["line"] = await asyncio.to_thread(utage.create_tracking, f"Kindle#{book['id']} {data['title'][:60]}")
+        except utage.UtageError as e:
+            log.warning("tracking create failed: %s", e)
+            return f"⚠️ 本専用のLINE登録経路を作れませんでした（共通のURL {epub.LINE_URL or '（未設定）'} を使います）: {e}"
+        storage.update_book(book["id"], data=data)
+        return None
+
     async def publish_book(self, book, message, channel):
         data = book["data"]
+        warn = await self.attach_line(book)
+        if warn:
+            await channel.send(warn)
+        if epub.gift_enabled() and not epub.line_url(data):
+            return await channel.send("⚠️ 特典の案内に入れるLINEのURLがありません。.env の UTAGE_* か LINE_URL を設定してください。")
         async with browser_lock:
             try:
                 path, jpg, _ = await build_files(book["id"], data)
@@ -344,7 +362,64 @@ class KindleBot(discord.Client):
 
 
 # ---------------------------------------------------------------- report
-def daily_report():
+def _kindle_trackings():
+    """{tracking_id: 本のタイトル}（本ごとに作った LINE 登録経路）"""
+    out = {}
+    for b in storage.books_with_status("published", "saved"):
+        line = b["data"].get("line") or {}
+        if line.get("id"):
+            out[line["id"]] = b["data"]["title"]
+    return out
+
+
+def utage_fields(e, days):
+    """UTAGE の数値をレポートに足す（days=1 なら今日、7 なら直近7日）。取れなくてもレポートは出す。"""
+    if not utage.enabled():
+        e.add_field(name="公式LINE（UTAGE）", value=".env の UTAGE_API_KEY / UTAGE_ACCOUNT_ID / UTAGE_SCENARIO_ID が未設定です",
+                    inline=False)
+        return
+    today = datetime.now(JST).date()
+    date_from = (today - timedelta(days=days - 1)).isoformat()
+    period = "今日" if days == 1 else f"{days}日"
+    try:
+        books = _kindle_trackings()
+        recent = utage.tracking_stats(date_from, today.isoformat())
+        total = utage.tracking_stats()
+        ids = set(books) | {t for t, s in total.items() if (s.get("name") or "").startswith("Kindle#")}
+
+        def reg(stats, tid):
+            return (stats.get(tid) or {}).get("registration_count") or 0
+        e.add_field(
+            name="公式LINE登録（Kindle経由）",
+            value=f"{period} **{sum(reg(recent, t) for t in ids):,}人** ／ 累計 {sum(reg(total, t) for t in ids):,}人"
+                  f"\nシナリオ全体の読者 {utage.reader_total():,}人",
+            inline=False,
+        )
+        rows = sorted(ids, key=lambda t: (reg(recent, t), reg(total, t)), reverse=True)[:8]
+        lines = [f"{reg(total, t):,}人（{period}+{reg(recent, t)}） {(books.get(t) or total.get(t, {}).get('name') or t)[:34]}"
+                 for t in rows if reg(total, t)]
+        e.add_field(name="本ごとのLINE登録（累計）", value="\n".join(lines) or "まだ登録はありません", inline=False)
+    except utage.UtageError as ex:
+        log.warning("utage tracking stats failed: %s", ex)
+        e.add_field(name="公式LINE（UTAGE）", value=f"取得できませんでした: {ex}", inline=False)
+    if not utage.UTAGE_FUNNEL_IDS:
+        return
+    try:
+        lines, amount, count = [], 0, 0
+        for name, t in utage.funnels(date_from, today.isoformat()):
+            rate = f"{t['registration_count'] / t['uu'] * 100:.1f}%" if t["uu"] else "-"
+            lines.append(f"**{name[:30]}**\nPV {t['pv']:,} ／ 登録 {t['registration_count']:,}（{rate}） ／ "
+                         f"売上 {t['sale_count']:,}件 {t['sale_amount']:,}円")
+            amount += t["sale_amount"]
+            count += t["sale_count"]
+        e.add_field(name=f"UTAGEの売上（{period}）", value=f"**{amount:,}円**（{count:,}件）", inline=False)
+        e.add_field(name=f"ファネル（{period}）", value="\n".join(lines)[:1000], inline=False)
+    except utage.UtageError as ex:
+        log.warning("utage funnel stats failed: %s", ex)
+        e.add_field(name="ファネル（UTAGE）", value=f"取得できませんでした: {ex}", inline=False)
+
+
+async def daily_report():
     today = datetime.now(JST).date()
     since = datetime.combine(today, time(0, 0, tzinfo=JST)).isoformat()
     done = storage.published_since(since)
@@ -354,17 +429,19 @@ def daily_report():
     e.add_field(name="承認待ちの下書き", value=f"{len(storage.books_with_status('pending'))}冊", inline=True)
     e.add_field(name="これまでに登録した本", value=f"{len(storage.books_with_status('published', 'saved'))}冊", inline=True)
     e.add_field(name="残りのテーマ", value=f"{len(storage.list_themes(limit=1000))}件", inline=True)
-    e.set_footer(text="売上（ロイヤリティ・既読ページ数）は KDP のレポート画面で確認してください")
+    await asyncio.to_thread(utage_fields, e, 1)
+    e.set_footer(text="Kindleの売上（ロイヤリティ・既読ページ数）は KDP のレポート画面で確認してください")
     return e
 
 
-def weekly_report():
+async def weekly_report():
     since = (datetime.now(JST) - timedelta(days=7)).isoformat()
     done = storage.published_since(since)
     e = discord.Embed(title="📊 週次レポート（直近7日）", color=0xF2A33A)
     e.add_field(name="KDPに登録した本", value=f"{len(done)}冊", inline=True)
     e.add_field(name="これまでの合計", value=f"{len(storage.books_with_status('published', 'saved'))}冊", inline=True)
     e.add_field(name="タイトル", value="\n".join(f"・{b['data']['title'][:60]}" for b in done) or "-", inline=False)
+    await asyncio.to_thread(utage_fields, e, 7)
     e.set_footer(text="冊数が増えるほど「この本を読んだ人はこれも読んでいます」に自分の本が並びやすくなります")
     return e
 
@@ -400,11 +477,13 @@ def register_commands(bot):
 
     @bot.tree.command(name="日次レポート", description="今日の登録状況を表示する")
     async def daily_report_cmd(interaction):
-        await interaction.response.send_message(embed=daily_report())
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await daily_report())
 
     @bot.tree.command(name="レポート", description="直近7日のレポートを表示する")
     async def report_cmd(interaction):
-        await interaction.response.send_message(embed=weekly_report())
+        await interaction.response.defer()
+        await interaction.followup.send(embed=await weekly_report())
 
     @bot.tree.command(name="停止", description="毎朝の自動生成を止める")
     async def pause_cmd(interaction):
