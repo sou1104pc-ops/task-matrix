@@ -21,6 +21,17 @@ DESC_TAGS = {"p", "b", "br", "ul", "li"}
 BODY_TAGS = {"h2", "h3", "p", "ul", "ol", "li", "b", "br"}
 
 
+# 悪い例として挙げているだけの文（「『必ず稼げる』のような言葉は避ける」など）は誇大表現として扱わない
+NEGATION_AFTER = r"^[^。\n]{0,25}(避け|使わな|書かな|言わな|NG|禁止|ダメ|わけではな|とは限らな|ではありません|ないでください|に注意|は危険|は誤解)"
+
+
+def is_quoted_or_negated(text, m):
+    before = text[max(0, m.start() - 15):m.start()]
+    after = text[m.end():m.end() + 40]
+    quoted = before.rfind("「") > before.rfind("」") and "」" in after[:15]
+    return quoted or bool(re.search(NEGATION_AFTER, after))
+
+
 def text_of(html):
     return unescape(re.sub(r"<[^>]+>", "", html or ""))
 
@@ -120,7 +131,7 @@ def check(data):
         issues.append(("warn", "カテゴリーの候補がありません"))
 
     for pat in EXAGGERATION:
-        m = re.search(pat, all_text)
+        m = next((m for m in re.finditer(pat, all_text) if not is_quoted_or_negated(all_text, m)), None)
         if m:
             issues.append(("error", f"断定・誇大表現「{m.group(0)}」があります"))
     memo = data.get("theme", {}).get("memo", "")
